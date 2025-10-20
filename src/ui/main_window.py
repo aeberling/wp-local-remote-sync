@@ -6,10 +6,13 @@ from tkinter import ttk, messagebox, scrolledtext
 from datetime import datetime, timedelta
 from threading import Thread
 import sys
+import os
 from pathlib import Path
 from ..services.config_service import ConfigService
 from ..controllers.push_controller import PushController
 from ..controllers.pull_controller import PullController
+from ..controllers.db_push_controller import DBPushController
+from ..controllers.db_pull_controller import DBPullController
 from ..models.site_config import SiteConfig
 
 # Import Sun Valley theme
@@ -66,6 +69,15 @@ class MainWindow:
         self.root.title("WordPress Deployment Tool")
         self.root.geometry("1100x700")  # Reduced height for better screen fit
 
+        # Set window icon
+        try:
+            icon_path = Path(__file__).parent.parent.parent / 'assets' / 'icon.png'
+            if icon_path.exists():
+                icon = tk.PhotoImage(file=str(icon_path))
+                self.root.iconphoto(True, icon)
+        except Exception as e:
+            pass  # Silently fail if icon not found
+
         # Apply Sun Valley theme - auto-detects system dark/light mode
         sv_ttk.set_theme("dark")  # or "light" - will auto-detect system preference
 
@@ -73,6 +85,8 @@ class MainWindow:
         self.config_service = ConfigService()
         self.push_controller = PushController(self.config_service)
         self.pull_controller = PullController(self.config_service)
+        self.db_push_controller = DBPushController(self.config_service)
+        self.db_pull_controller = DBPullController(self.config_service)
 
         # Create UI
         self.create_widgets()
@@ -83,14 +97,48 @@ class MainWindow:
         logger = logging.getLogger('wp-deploy')
         logger.info("Application started with Sun Valley theme")
 
-        # Better focus handling
-        self.root.update()
-        self.root.lift()
-        self.root.focus_force()
+        # macOS focus fix - activate the app properly
+        self.setup_macos_focus_fix()
 
-        # Make sure window accepts events
-        self.root.attributes('-topmost', True)
-        self.root.after(100, lambda: self.root.attributes('-topmost', False))
+        # Bind click events to restore focus
+        self.root.bind('<Button-1>', self.ensure_focus)
+        self.root.bind('<FocusIn>', self.on_focus_in)
+
+    def setup_macos_focus_fix(self):
+        """Setup macOS-specific focus handling"""
+        import platform
+        if platform.system() == 'Darwin':  # macOS
+            # Force window to front and activate
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+            self.root.after(100, lambda: self.root.attributes('-topmost', False))
+
+            # Try to activate the application using AppleScript
+            try:
+                import subprocess
+                script = 'tell application "System Events" to set frontmost of first process whose unix id is {} to true'.format(
+                    os.getpid()
+                )
+                subprocess.run(['osascript', '-e', script], capture_output=True)
+            except Exception as e:
+                import logging
+                logger = logging.getLogger('wp-deploy')
+                logger.debug(f"Could not activate app via AppleScript: {e}")
+
+    def ensure_focus(self, event=None):
+        """Ensure the window has focus when clicked"""
+        # Only process clicks on the window itself, not its children
+        if event and event.widget == self.root:
+            self.root.lift()
+            self.root.focus_force()
+
+    def on_focus_in(self, event=None):
+        """Handle focus gained event"""
+        # Update window to ensure proper event processing
+        try:
+            self.root.update_idletasks()
+        except:
+            pass
 
     def create_widgets(self):
         """Create all UI widgets"""
@@ -156,9 +204,17 @@ class MainWindow:
         button_frame = ttk.Frame(self.push_frame)
         button_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        self.push_button = ttk.Button(button_frame, text="▲ PUSH TO REMOTE", command=self.do_push,
+        self.push_button = ttk.Button(button_frame, text="▲ PUSH UPDATED GIT FILES", command=self.do_push,
                                       style="Accent.TButton")
         self.push_button.pack(side=tk.LEFT, padx=5, ipady=12, ipadx=25)
+
+        self.push_all_button = ttk.Button(button_frame, text="▲ PUSH ALL FILES", command=self.do_push_all,
+                                          style="Accent.TButton")
+        self.push_all_button.pack(side=tk.LEFT, padx=5, ipady=12, ipadx=25)
+
+        self.db_push_button = ttk.Button(button_frame, text="🗄️ PUSH DATABASE", command=self.do_db_push,
+                                         style="Accent.TButton")
+        self.db_push_button.pack(side=tk.LEFT, padx=5, ipady=12, ipadx=25)
 
         # Status
         self.push_status = ttk.Label(self.push_frame, text="Ready", relief=tk.SUNKEN)
@@ -221,9 +277,13 @@ class MainWindow:
         button_frame = ttk.Frame(self.pull_frame)
         button_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        self.pull_button = ttk.Button(button_frame, text="▼ PULL FROM REMOTE", command=self.do_pull,
+        self.pull_button = ttk.Button(button_frame, text="▼ PULL FILES", command=self.do_pull,
                                       style="Accent.TButton")
         self.pull_button.pack(side=tk.LEFT, padx=5, ipady=12, ipadx=25)
+
+        self.db_pull_button = ttk.Button(button_frame, text="🗄️ PULL DATABASE", command=self.do_db_pull,
+                                         style="Accent.TButton")
+        self.db_pull_button.pack(side=tk.LEFT, padx=5, ipady=12, ipadx=25)
 
         # Status
         self.pull_status = ttk.Label(self.pull_frame, text="Ready", relief=tk.SUNKEN)
@@ -469,7 +529,7 @@ class MainWindow:
             success, message, stats = self.push_controller.push(site_id, progress_callback)
 
             def update_ui():
-                self.push_button.config(state=tk.NORMAL, text="▲ PUSH TO REMOTE")
+                self.push_button.config(state=tk.NORMAL, text="▲ PUSH UPDATED GIT FILES")
                 self.push_status.config(text=message)
 
                 if success:
@@ -487,6 +547,61 @@ class MainWindow:
             self.root.after(0, update_ui)
 
         Thread(target=push_thread, daemon=True).start()
+
+    def do_push_all(self):
+        """Execute push ALL files operation"""
+        import logging
+        logger = logging.getLogger('wp-deploy')
+
+        logger.info("=== PUSH ALL OPERATION STARTED ===")
+
+        site_id = self.get_selected_site_id(self.push_site_combo)
+        if not site_id:
+            logger.warning("No site selected for push all operation")
+            messagebox.showwarning("Warning", "Please select a site")
+            return
+
+        site = self.config_service.get_site(site_id)
+        logger.info(f"Selected site: {site.name} ({site_id})")
+        logger.info(f"Local path: {site.local_path}")
+        logger.info(f"Remote: {site.remote_host}:{site.remote_path}")
+
+        if not messagebox.askyesno("Confirm", f"Push ALL files from git repo to {site.remote_host}?\n\nThis will upload all tracked files, not just changes."):
+            logger.info("Push all operation cancelled by user")
+            return
+
+        # Visual feedback - button clicked
+        self.push_all_button.config(state=tk.DISABLED, text="⏳ PUSHING ALL...")
+        self.push_status.config(text="Initializing push all...")
+        logger.info("Starting push all operation...")
+
+        def push_all_thread():
+            def progress_callback(current, total, message):
+                status_text = f"Pushing: {current}/{total} - {message}"
+                self.root.after(0, lambda: self.push_status.config(text=status_text))
+                logger.info(f"Progress: {current}/{total} - {message}")
+
+            success, message, stats = self.push_controller.push_all(site_id, progress_callback)
+
+            def update_ui():
+                self.push_all_button.config(state=tk.NORMAL, text="▲ PUSH ALL FILES")
+                self.push_status.config(text=message)
+
+                if success:
+                    logger.info(f"✓ Push all completed successfully: {stats['files_pushed']} files")
+                    result = f"Push All completed!\n\n"
+                    result += f"Files pushed: {stats['files_pushed']}\n"
+                    result += f"Bytes transferred: {stats['bytes_transferred']}\n"
+                    if stats['files_failed'] > 0:
+                        result += f"Files failed: {stats['files_failed']}\n"
+                    messagebox.showinfo("Success", result)
+                else:
+                    logger.error(f"✗ Push all failed: {message}")
+                    messagebox.showerror("Error", message)
+
+            self.root.after(0, update_ui)
+
+        Thread(target=push_all_thread, daemon=True).start()
 
     def do_pull(self):
         """Execute pull operation"""
@@ -544,6 +659,125 @@ class MainWindow:
             self.root.after(0, update_ui)
 
         Thread(target=pull_thread, daemon=True).start()
+
+    def do_db_push(self):
+        """Push database to remote"""
+        # Get selected site
+        selection = self.push_site_combo.get()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select a site first")
+            return
+
+        site_id = selection.split('(')[1].rstrip(')')
+        site = self.config_service.get_site(site_id)
+
+        # Check if database is configured
+        if not site.database_config:
+            messagebox.showwarning("Not Configured",
+                                 "Database not configured for this site.\n\n"
+                                 "Please configure database settings in the Configuration tab.")
+            return
+
+        # Show warning for production push
+        if site.database_config.require_confirmation_on_push:
+            result = messagebox.askyesno("⚠️ Warning: Push Database to Production",
+                                        f"You are about to OVERWRITE the PRODUCTION database with your local database.\n\n"
+                                        f"Site: {site.name}\n"
+                                        f"From: {site.database_config.local_url or 'Local'}\n"
+                                        f"To: {site.database_config.remote_url or 'Production'}\n\n"
+                                        f"This will:\n"
+                                        f"  • Replace all content, posts, and pages\n"
+                                        f"  • Potentially affect live users\n"
+                                        f"  • Create a backup first (recommended)\n\n"
+                                        f"Are you absolutely sure you want to continue?")
+            if not result:
+                return
+
+        # Disable button
+        self.db_push_button.config(state=tk.DISABLED)
+        self.push_status.config(text="Pushing database...")
+
+        # Show progress dialog
+        progress = ProgressDialog(self.root, "Database Push", "Pushing database to remote server...")
+
+        def db_push_thread():
+            success, message, stats = self.db_push_controller.push(site_id)
+
+            def update_ui():
+                progress.close()
+                self.db_push_button.config(state=tk.NORMAL)
+
+                if success:
+                    self.push_status.config(text=message)
+                    messagebox.showinfo("Success", f"{message}\n\n"
+                                                   f"Tables: {stats.get('tables_exported', 0)}\n"
+                                                   f"URLs Replaced: {stats.get('urls_replaced', 0)}\n"
+                                                   f"Backup: {stats.get('backup_created', 'None')}")
+                else:
+                    self.push_status.config(text="Error")
+                    messagebox.showerror("Error", message)
+
+            self.root.after(0, update_ui)
+
+        Thread(target=db_push_thread, daemon=True).start()
+
+    def do_db_pull(self):
+        """Pull database from remote"""
+        # Get selected site
+        selection = self.pull_site_combo.get()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select a site first")
+            return
+
+        site_id = selection.split('(')[1].rstrip(')')
+        site = self.config_service.get_site(site_id)
+
+        # Check if database is configured
+        if not site.database_config:
+            messagebox.showwarning("Not Configured",
+                                 "Database not configured for this site.\n\n"
+                                 "Please configure database settings in the Configuration tab.")
+            return
+
+        # Show info dialog
+        result = messagebox.askyesno("Pull Database from Production",
+                                    f"You are about to overwrite your LOCAL database with the production database.\n\n"
+                                    f"Site: {site.name}\n"
+                                    f"From: {site.database_config.remote_url or 'Production'}\n"
+                                    f"To: {site.database_config.local_url or 'Local'}\n\n"
+                                    f"Your local development work in the database will be lost.\n"
+                                    f"A backup of your local database will be created.\n\n"
+                                    f"Continue?")
+        if not result:
+            return
+
+        # Disable button
+        self.db_pull_button.config(state=tk.DISABLED)
+        self.pull_status.config(text="Pulling database...")
+
+        # Show progress dialog
+        progress = ProgressDialog(self.root, "Database Pull", "Pulling database from remote server...")
+
+        def db_pull_thread():
+            success, message, stats = self.db_pull_controller.pull(site_id)
+
+            def update_ui():
+                progress.close()
+                self.db_pull_button.config(state=tk.NORMAL)
+
+                if success:
+                    self.pull_status.config(text=message)
+                    messagebox.showinfo("Success", f"{message}\n\n"
+                                                   f"Tables: {stats.get('tables_exported', 0)}\n"
+                                                   f"URLs Replaced: {stats.get('urls_replaced', 0)}\n"
+                                                   f"Backup: {stats.get('backup_created', 'None')}")
+                else:
+                    self.pull_status.config(text="Error")
+                    messagebox.showerror("Error", message)
+
+            self.root.after(0, update_ui)
+
+        Thread(target=db_pull_thread, daemon=True).start()
 
     def add_site_dialog(self):
         """Show dialog to add new site"""

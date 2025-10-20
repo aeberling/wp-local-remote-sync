@@ -97,11 +97,18 @@ class ConfigService:
         sites = [s for s in sites if s.id != site_id]
         self._save_sites(sites)
 
-        # Remove password from keyring
+        # Remove passwords from keyring
         try:
             keyring.delete_password("wp-deploy", f"site-{site_id}")
         except:
             pass
+
+        # Remove database passwords from keyring
+        for db_type in ['local', 'remote']:
+            try:
+                keyring.delete_password("wp-deploy-db", f"{site_id}_{db_type}")
+            except:
+                pass
 
         self.logger.info(f"Deleted site: {site_id}")
 
@@ -128,6 +135,41 @@ class ConfigService:
             return keyring.get_password("wp-deploy", f"site-{site_id}")
         except Exception as e:
             self.logger.error(f"Error retrieving password for {site_id}: {e}")
+            return None
+
+    def set_database_password(self, site_id: str, db_type: str, password: str):
+        """
+        Store database password in system keyring
+
+        Args:
+            site_id: Site identifier
+            db_type: 'local' or 'remote'
+            password: Database password
+        """
+        if db_type not in ['local', 'remote']:
+            raise ValueError("db_type must be 'local' or 'remote'")
+
+        keyring.set_password("wp-deploy-db", f"{site_id}_{db_type}", password)
+        self.logger.info(f"Database password stored for site {site_id} ({db_type})")
+
+    def get_database_password(self, site_id: str, db_type: str) -> Optional[str]:
+        """
+        Retrieve database password from system keyring
+
+        Args:
+            site_id: Site identifier
+            db_type: 'local' or 'remote'
+
+        Returns:
+            Password string or None if not found
+        """
+        if db_type not in ['local', 'remote']:
+            raise ValueError("db_type must be 'local' or 'remote'")
+
+        try:
+            return keyring.get_password("wp-deploy-db", f"{site_id}_{db_type}")
+        except Exception as e:
+            self.logger.error(f"Error retrieving database password for {site_id} ({db_type}): {e}")
             return None
 
     def update_last_pushed_commit(self, site_id: str, commit_hash: str):

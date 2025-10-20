@@ -1,16 +1,23 @@
 # WordPress Deployment Tool
 
+<div align="center">
+  <img src="assets/icon.png" alt="WordPress Deployment Tool Logo" width="200"/>
+</div>
+
 A desktop application for synchronizing WordPress sites between Local by Flywheel and remote hosting platforms (Kinsta, etc.) using Git-based version tracking and SFTP file transfer.
 
 ## Features
 
 - **Push to Remote**: Upload changed files based on Git commits
 - **Pull from Remote**: Download files based on date ranges and specific paths
+- **Database Sync**: Push and pull MySQL databases between local and remote
+- **Auto-detect Database**: Automatically reads database credentials from wp-config.php files
 - **Git Integration**: Tracks commits to identify which files have changed
 - **Secure Credentials**: Passwords stored in system keyring
 - **Selective Sync**: Configure which paths to include/exclude
 - **Progress Tracking**: Real-time feedback during transfers
 - **Multiple Sites**: Manage configurations for multiple WordPress sites
+- **URL Replacement**: Automatically handles WordPress URL changes during database sync
 
 ## Installation
 
@@ -19,6 +26,10 @@ A desktop application for synchronizing WordPress sites between Local by Flywhee
 - Python 3.8 or higher
 - Git installed and configured
 - SFTP access to your remote server
+- **WP-CLI** (WordPress Command Line) for database sync features
+  - **macOS**: `brew install wp-cli`
+  - **Linux**: [Installation Guide](https://wp-cli.org/#installing)
+  - **Remote server**: Usually pre-installed by hosting providers (Kinsta, WP Engine, etc.)
 
 ### Setup
 
@@ -110,6 +121,90 @@ The tool will:
 - Download and overwrite local files
 - Create directories as needed
 
+### Database Sync
+
+The tool can synchronize MySQL databases between local and remote WordPress installations, with automatic URL replacement and backup creation.
+
+#### Configure Database
+
+1. Go to the **Configuration** tab
+2. Select your site
+3. Click **Configure Database**
+4. **Option 1: Auto-detect (Recommended)**
+   - Click **Auto-detect from wp-config.php** button for Local Database
+   - Click **Auto-detect from wp-config.php** button for Remote Database
+   - The tool will automatically read your wp-config.php files and populate all fields
+   - Review the detected configuration
+
+5. **Option 2: Manual Entry**
+   - **Local Database**: Name, host (usually localhost), port (3306), username, password
+   - **Remote Database**: Name, host (usually localhost via SSH), port (3306), username, password
+   - **Local URL**: Your local WordPress URL (e.g., `http://mysite.local`)
+   - **Remote URL**: Your production WordPress URL (e.g., `https://mysite.com`)
+
+6. **Exclude Tables**: Tables to skip during sync (e.g., `wp_users`, `wp_usermeta`)
+7. Click **Test Local Connection** and **Test Remote Connection** to verify
+8. Click **Save**
+
+**Note**: Auto-detection reads database credentials from your WordPress wp-config.php files, making configuration quick and error-free.
+
+#### Push Database to Remote
+
+⚠️ **Warning**: This will **OVERWRITE** your production database with your local database!
+
+1. Go to **Push to Remote** tab
+2. Select your site
+3. Click **Push Database**
+4. Review the warning dialog carefully
+5. Confirm the operation
+
+The tool will:
+- Export your local database
+- Create a backup of the remote database
+- Upload and import the database to remote
+- Replace local URLs with remote URLs (handles WordPress serialized data)
+
+**Use case**: Pushing a complete site redesign or major content changes to production.
+
+#### Pull Database from Remote
+
+1. Go to **Pull from Remote** tab
+2. Select your site
+3. Click **Pull Database**
+4. Confirm the operation
+
+The tool will:
+- Export the remote database
+- Create a backup of your local database
+- Download and import the database locally
+- Replace remote URLs with local URLs
+
+**Use case**: Getting the latest production content/posts to your local development environment.
+
+#### Database Sync Safety Features
+
+- **Automatic Backups**: Creates a backup before every import (with timestamp)
+- **Confirmation Dialogs**: Requires confirmation before destructive operations
+- **Table Exclusions**: Skip sensitive tables (users, sessions) when pushing to production
+- **URL Replacement**: Uses WP-CLI to properly handle WordPress serialized data
+- **WP-CLI Verification**: Checks that WP-CLI is available before operations
+
+#### Common Exclude Tables
+
+When pushing to production, you typically want to exclude:
+```
+wp_users           # Don't overwrite production users
+wp_usermeta        # Don't overwrite user metadata
+wp_sessions        # Temporary session data
+```
+
+For WooCommerce sites, also exclude:
+```
+wp_woocommerce_sessions
+wp_woocommerce_orders
+wp_woocommerce_order_items
+```
+
 ## Configuration Files
 
 Configuration files are stored in your home directory:
@@ -171,6 +266,28 @@ The password storage failed. Try:
 2. Re-enter the password
 3. Save the configuration
 
+### "WP-CLI not found"
+
+Database sync requires WP-CLI to be installed:
+
+**On Local (macOS)**:
+```bash
+brew install wp-cli
+wp --version  # Verify installation
+```
+
+**On Remote Server**:
+- Most managed WordPress hosts (Kinsta, WP Engine, Flywheel) have WP-CLI pre-installed
+- Check with your hosting provider if you get this error
+- Test via SSH: `ssh user@host 'wp --version'`
+
+### "Database import failed"
+
+1. Verify database credentials are correct
+2. Check that the database user has proper permissions (CREATE, DROP, INSERT, etc.)
+3. Review logs at `~/.wp-deploy/logs/operations.log` for detailed error messages
+4. Ensure there's enough disk space on the target system
+
 ## Logs
 
 View detailed logs at:
@@ -203,17 +320,18 @@ View detailed logs at:
 
 ## Limitations (Current Version)
 
-- Database synchronization not included (files only)
-- No conflict resolution (last write wins)
+- No conflict resolution for files (last write wins)
 - No automatic rollback on errors
 - Large files (>100MB) may timeout depending on connection
+- Database sync requires WP-CLI on both local and remote systems
 
 ## Future Enhancements
 
 See `DEVELOPMENT_DOCUMENTATION.md` for planned features:
-- Database synchronization
-- Conflict resolution
-- Automatic backups
+- Conflict resolution for file sync
+- Scheduled database pulls
+- Database diff viewer
+- Multi-environment support (dev → staging → production)
 - Real-time sync
 - Kinsta API integration
 
