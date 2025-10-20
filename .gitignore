@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+.DS_Store
+
+# Config (contains user data)
+config/sites.yaml
+config/sync_state.json
+.wp-deploy/
+sites.yaml
+sync_state.json
+
+# Logs
+*.log
+logs/
+
+# Credentials and secrets
+.env
+.env.local
+credentials.json
+*.key
+*.pem
+
+# Distribution
+*.spec

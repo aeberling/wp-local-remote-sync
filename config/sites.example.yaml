@@ -1,0 +1,33 @@
+# Example site configuration
+# Copy this file and customize for your sites
+# Actual configuration will be stored in ~/.wp-deploy/sites.yaml
+
+sites:
+  - id: "example-001"
+    name: "My WordPress Site"
+    local_path: "/Users/yourname/Local Sites/mysite/app/public"
+    git_repo_path: "/Users/yourname/Local Sites/mysite/app/public"
+    remote_host: "sftp.kinsta.com"
+    remote_port: 22
+    remote_path: "/www/mysite_123/public"
+    remote_username: "mysite_123"
+    # Password stored separately in system keyring
+    last_pushed_commit: ""
+    exclude_patterns:
+      - "*.log"
+      - "wp-config.php"
+      - "wp-config-local.php"
+      - ".git/"
+      - "node_modules/"
+      - ".DS_Store"
+      - ".htaccess"
+      - "*.sql"
+      - "*.sql.gz"
+      - ".env"
+      - ".env.local"
+    pull_include_paths:
+      - "wp-content/uploads"
+      - "wp-content/themes/my-theme"
+      - "wp-content/plugins/my-plugin"
+    created_at: "2025-01-15T10:30:00Z"
+    updated_at: "2025-01-15T10:30:00Z"
