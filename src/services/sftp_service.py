@@ -239,6 +239,85 @@ class SFTPService:
         except FileNotFoundError:
             return False
 
+    def get_remote_mtime(self, remote_path: str) -> float:
+        """
+        Get modification time of a remote file
+
+        Args:
+            remote_path: Remote file path
+
+        Returns:
+            Modification time as float (seconds since epoch), or 0 if file doesn't exist
+        """
+        try:
+            stat_info = self.sftp_client.stat(remote_path)
+            return stat_info.st_mtime
+        except FileNotFoundError:
+            return 0
+
+    def is_local_newer(self, local_path: str, remote_path: str) -> bool:
+        """
+        Check if local file is newer than remote file
+
+        Args:
+            local_path: Local file path
+            remote_path: Remote file path
+
+        Returns:
+            True if local file is newer or remote doesn't exist, False otherwise
+        """
+        try:
+            # Get local file modification time
+            local_mtime = os.path.getmtime(local_path)
+
+            # Get remote file modification time (0 if doesn't exist)
+            remote_mtime = self.get_remote_mtime(remote_path)
+
+            # If remote doesn't exist, local is "newer"
+            if remote_mtime == 0:
+                return True
+
+            # Compare modification times
+            return local_mtime > remote_mtime
+
+        except Exception as e:
+            self.logger.warning(f"Error comparing file times for {local_path}: {e}")
+            # On error, assume we should upload
+            return True
+
+    def is_remote_newer(self, remote_path: str, local_path: str) -> bool:
+        """
+        Check if remote file is newer than local file
+
+        Args:
+            remote_path: Remote file path
+            local_path: Local file path
+
+        Returns:
+            True if remote file is newer or local doesn't exist, False otherwise
+        """
+        try:
+            # Get remote file modification time
+            remote_mtime = self.get_remote_mtime(remote_path)
+
+            # If remote doesn't exist, we shouldn't pull it
+            if remote_mtime == 0:
+                return False
+
+            # Get local file modification time (0 if doesn't exist)
+            if not os.path.exists(local_path):
+                return True
+
+            local_mtime = os.path.getmtime(local_path)
+
+            # Compare modification times
+            return remote_mtime > local_mtime
+
+        except Exception as e:
+            self.logger.warning(f"Error comparing file times for {remote_path}: {e}")
+            # On error, assume we should download
+            return True
+
     def _format_bytes(self, bytes_size: int) -> str:
         """Format bytes to human-readable string"""
         for unit in ['B', 'KB', 'MB', 'GB']:

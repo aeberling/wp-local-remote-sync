@@ -60,7 +60,10 @@ class DBPullController:
         temp_remote_file = None
 
         try:
-            total_steps = 10
+            # Calculate total steps
+            remote_prefix = site.database_config.remote_table_prefix
+            local_prefix = site.database_config.local_table_prefix
+            total_steps = 12 if remote_prefix != local_prefix else 11
             current_step = 0
 
             # Step 1: Verify WP-CLI locally
@@ -152,7 +155,27 @@ class DBPullController:
             file_size = os.path.getsize(temp_local_file)
             stats['bytes_transferred'] = file_size
 
-            # Step 8: Backup local database
+            # Step 8: Replace table prefixes if different
+            current_step += 1
+            if progress_callback:
+                progress_callback(current_step, total_steps, "Checking table prefixes")
+
+            remote_prefix = site.database_config.remote_table_prefix
+            local_prefix = site.database_config.local_table_prefix
+
+            if remote_prefix != local_prefix:
+                self.logger.info(f"Table prefixes differ: {remote_prefix} -> {local_prefix}")
+                if progress_callback:
+                    progress_callback(current_step, total_steps, f"Replacing table prefix {remote_prefix} -> {local_prefix}")
+
+                success, msg = db_service.replace_table_prefix_in_sql(temp_local_file, remote_prefix, local_prefix)
+                if not success:
+                    ssh_service.disconnect()
+                    return False, f"Failed to replace table prefixes: {msg}", stats
+
+                self.logger.info(f"Table prefix replacement completed: {msg}")
+
+            # Step 9: Backup local database
             current_step += 1
             if progress_callback:
                 progress_callback(current_step, total_steps, "Creating local database backup")
@@ -169,7 +192,7 @@ class DBPullController:
                 else:
                     self.logger.warning(f"Failed to create local backup: {msg}")
 
-            # Step 9: Import database locally
+            # Step 10: Import database locally
             current_step += 1
             if progress_callback:
                 progress_callback(current_step, total_steps, "Importing database locally")
@@ -181,7 +204,17 @@ class DBPullController:
 
             stats['tables_imported'] = stats['tables_exported']
 
-            # Step 10: Search-replace URLs locally
+            # Step 11: Update WordPress options for new prefix (if changed)
+            if remote_prefix != local_prefix:
+                current_step += 1
+                if progress_callback:
+                    progress_callback(current_step, total_steps, "Updating WordPress options for new prefix")
+
+                success, msg = db_service.update_wp_options_prefix(remote_prefix, local_prefix, remote=False)
+                if not success:
+                    self.logger.warning(f"Failed to update WordPress options: {msg}")
+
+            # Step 12: Search-replace URLs locally
             current_step += 1
             if progress_callback:
                 progress_callback(current_step, total_steps, "Updating URLs in local database")

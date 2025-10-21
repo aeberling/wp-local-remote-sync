@@ -34,6 +34,7 @@ class SiteConfig:
         ".env.local"
     ])
     pull_include_paths: List[str] = field(default_factory=list)
+    push_newer_only: bool = True  # Only push/pull files newer than remote/local
     database_config: Optional[DatabaseConfig] = None
     last_db_pushed_at: str = ""
     last_db_pulled_at: str = ""
@@ -55,6 +56,7 @@ class SiteConfig:
             'last_pushed_commit': self.last_pushed_commit,
             'exclude_patterns': self.exclude_patterns,
             'pull_include_paths': self.pull_include_paths,
+            'push_newer_only': self.push_newer_only,
             'last_db_pushed_at': self.last_db_pushed_at,
             'last_db_pulled_at': self.last_db_pulled_at,
             'created_at': self.created_at,

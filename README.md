@@ -73,8 +73,8 @@ This will launch the GUI application.
      - **Pull Include Paths**: Paths to sync when pulling (one per line)
        ```
        wp-content/uploads
-       wp-content/themes/my-theme
-       wp-content/plugins/my-plugin
+       wp-content/themes/
+       wp-content/plugins/
        ```
    - Click **Save**
 

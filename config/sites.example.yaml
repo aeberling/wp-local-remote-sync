@@ -26,8 +26,8 @@ sites:
       - ".env"
       - ".env.local"
     pull_include_paths:
-      - "wp-content/uploads"
-      - "wp-content/themes/my-theme"
-      - "wp-content/plugins/my-plugin"
+      - "wp-content/uploads/"
+      - "wp-content/themes/"
+      - "wp-content/plugins/"
     created_at: "2025-01-15T10:30:00Z"
     updated_at: "2025-01-15T10:30:00Z"

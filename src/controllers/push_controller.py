@@ -79,6 +79,7 @@ class PushController:
 
             # Upload files
             total_files = len(files_to_push)
+            files_skipped = 0
             for i, file_path in enumerate(files_to_push):
                 if progress_callback:
                     progress_callback(i + 1, total_files, f"Uploading {file_path}")
@@ -90,6 +91,13 @@ class PushController:
                 if not os.path.exists(local_file):
                     self.logger.warning(f"Local file not found, skipping: {local_file}")
                     continue
+
+                # Skip if push_newer_only is enabled and local file is not newer
+                if site.push_newer_only:
+                    if not sftp.is_local_newer(local_file, remote_file):
+                        self.logger.info(f"Skipping {file_path} (remote is up-to-date)")
+                        files_skipped += 1
+                        continue
 
                 # Upload file
                 success, message = sftp.upload_file(local_file, remote_file)
@@ -123,6 +131,8 @@ class PushController:
             self.config_service.update_sync_state(sync_state)
 
             success_msg = f"Push completed: {stats['files_pushed']} files uploaded"
+            if files_skipped > 0:
+                success_msg += f", {files_skipped} skipped"
             if stats['files_failed'] > 0:
                 success_msg += f", {stats['files_failed']} failed"
 
@@ -189,6 +199,7 @@ class PushController:
 
             # Upload files
             total_files = len(files_to_push)
+            files_skipped = 0
             for i, file_path in enumerate(files_to_push):
                 if progress_callback:
                     progress_callback(i + 1, total_files, f"Uploading {file_path}")
@@ -200,6 +211,13 @@ class PushController:
                 if not os.path.exists(local_file):
                     self.logger.warning(f"Local file not found, skipping: {local_file}")
                     continue
+
+                # Skip if push_newer_only is enabled and local file is not newer
+                if site.push_newer_only:
+                    if not sftp.is_local_newer(local_file, remote_file):
+                        self.logger.info(f"Skipping {file_path} (remote is up-to-date)")
+                        files_skipped += 1
+                        continue
 
                 # Upload file
                 success, message = sftp.upload_file(local_file, remote_file)
@@ -233,6 +251,8 @@ class PushController:
             self.config_service.update_sync_state(sync_state)
 
             success_msg = f"Push ALL completed: {stats['files_pushed']} files uploaded"
+            if files_skipped > 0:
+                success_msg += f", {files_skipped} skipped"
             if stats['files_failed'] > 0:
                 success_msg += f", {stats['files_failed']} failed"
 

@@ -60,7 +60,10 @@ class DBPushController:
         temp_remote_file = None
 
         try:
-            total_steps = 10
+            # Calculate total steps
+            local_prefix = site.database_config.local_table_prefix
+            remote_prefix = site.database_config.remote_table_prefix
+            total_steps = 12 if local_prefix != remote_prefix else 11
             current_step = 0
 
             # Step 1: Verify WP-CLI locally
@@ -121,16 +124,36 @@ class DBPushController:
             if success:
                 stats['tables_exported'] = len(tables) - len(all_exclude_tables)
 
-            # Step 6: Search-replace URLs in exported file
+            # Step 6: Replace table prefixes if different
             current_step += 1
             if progress_callback:
-                progress_callback(current_step, total_steps, "Replacing URLs for remote environment")
+                progress_callback(current_step, total_steps, "Checking table prefixes")
+
+            local_prefix = site.database_config.local_table_prefix
+            remote_prefix = site.database_config.remote_table_prefix
+
+            if local_prefix != remote_prefix:
+                self.logger.info(f"Table prefixes differ: {local_prefix} -> {remote_prefix}")
+                if progress_callback:
+                    progress_callback(current_step, total_steps, f"Replacing table prefix {local_prefix} -> {remote_prefix}")
+
+                success, msg = db_service.replace_table_prefix_in_sql(temp_local_file, local_prefix, remote_prefix)
+                if not success:
+                    ssh_service.disconnect()
+                    return False, f"Failed to replace table prefixes: {msg}", stats
+
+                self.logger.info(f"Table prefix replacement completed: {msg}")
+
+            # Step 7: Search-replace URLs in exported file
+            current_step += 1
+            if progress_callback:
+                progress_callback(current_step, total_steps, "Preparing URL replacement")
 
             # We need to import to temp, do search-replace, then export again
             # For now, we'll do search-replace after import on remote
             # This is safer and uses WP-CLI's built-in serialized data handling
 
-            # Step 7: Upload database to remote
+            # Step 8: Upload database to remote
             current_step += 1
             if progress_callback:
                 progress_callback(current_step, total_steps, f"Uploading database ({self._format_bytes(file_size)})")
@@ -146,7 +169,7 @@ class DBPushController:
                 ssh_service.disconnect()
                 return False, f"Failed to upload database: {msg}", stats
 
-            # Step 8: Backup remote database
+            # Step 9: Backup remote database
             current_step += 1
             if progress_callback:
                 progress_callback(current_step, total_steps, "Creating remote database backup")
@@ -161,7 +184,7 @@ class DBPushController:
                 else:
                     self.logger.warning(f"Failed to create remote backup: {msg}")
 
-            # Step 9: Import database on remote
+            # Step 10: Import database on remote
             current_step += 1
             if progress_callback:
                 progress_callback(current_step, total_steps, "Importing database on remote server")
@@ -173,7 +196,17 @@ class DBPushController:
 
             stats['tables_imported'] = stats['tables_exported']
 
-            # Step 10: Search-replace URLs on remote
+            # Step 11: Update WordPress options for new prefix (if changed)
+            if local_prefix != remote_prefix:
+                current_step += 1
+                if progress_callback:
+                    progress_callback(current_step, total_steps, "Updating WordPress options for new prefix")
+
+                success, msg = db_service.update_wp_options_prefix(local_prefix, remote_prefix, remote=True)
+                if not success:
+                    self.logger.warning(f"Failed to update WordPress options: {msg}")
+
+            # Step 12: Search-replace URLs on remote
             current_step += 1
             if progress_callback:
                 progress_callback(current_step, total_steps, "Updating URLs in remote database")

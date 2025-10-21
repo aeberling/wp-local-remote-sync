@@ -56,9 +56,70 @@ class SiteDialog:
         main_frame = ttk.Frame(self.dialog, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Basic info (always visible)
-        basic_frame = ttk.LabelFrame(main_frame, text="Basic Information", padding=10)
-        basic_frame.pack(fill=tk.X, pady=5)
+        # Create main notebook for tabs
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Tab 1: Site Configuration
+        self.site_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.site_frame, text="Site")
+        self.create_site_tab()
+
+        # Tab 2: Database Configuration
+        self.db_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.db_frame, text="Database")
+        self.create_database_tab()
+
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=10)
+
+        self.save_button = ttk.Button(button_frame, text="💾 Save Site", command=self.save,
+                                      style="Accent.TButton")
+        self.save_button.pack(side=tk.LEFT, padx=5, ipady=10, ipadx=20)
+
+        self.cancel_button = ttk.Button(button_frame, text="✖ Cancel", command=self.cancel)
+        self.cancel_button.pack(side=tk.LEFT, padx=5, ipady=10, ipadx=20)
+
+    def create_site_tab(self):
+        """Create Site tab with sub-tabs for Basic Info, SSH/SFTP, and Advanced"""
+        # Create notebook for site sub-tabs
+        self.site_notebook = ttk.Notebook(self.site_frame)
+        self.site_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Sub-tab 1: Basic Information
+        basic_tab = ttk.Frame(self.site_notebook)
+        self.site_notebook.add(basic_tab, text="Basic Info")
+        self.create_basic_info_tab(basic_tab)
+
+        # Sub-tab 2: SSH/SFTP
+        ssh_tab = ttk.Frame(self.site_notebook)
+        self.site_notebook.add(ssh_tab, text="SSH / SFTP")
+        self.create_ssh_tab(ssh_tab)
+
+        # Sub-tab 3: Advanced Options
+        advanced_tab = ttk.Frame(self.site_notebook)
+        self.site_notebook.add(advanced_tab, text="Advanced")
+        self.create_advanced_tab(advanced_tab)
+
+    def create_basic_info_tab(self, parent):
+        """Create Basic Information fields"""
+        # Create scrollable frame
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Basic info fields
+        basic_frame = ttk.LabelFrame(scrollable_frame, text="Site Information", padding=10)
+        basic_frame.pack(fill=tk.X, pady=5, padx=10)
 
         row = 0
         ttk.Label(basic_frame, text="Site Name:").grid(row=row, column=0, sticky=tk.W, pady=5)
@@ -85,35 +146,27 @@ class SiteDialog:
         self.git_status_label = ttk.Label(basic_frame, text="", foreground="gray")
         self.git_status_label.grid(row=row, column=1, sticky=tk.W, pady=2, padx=5)
 
-        # Create notebook for tabs
-        self.notebook = ttk.Notebook(main_frame)
-        self.notebook.pack(fill=tk.BOTH, expand=True, pady=10)
+        # Pack canvas and scrollbar
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
-        # Tab 1: SSH/SFTP Configuration
-        self.ssh_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.ssh_frame, text="SSH / SFTP")
-        self.create_ssh_tab()
+    def create_ssh_tab(self, parent):
+        """Create SSH/SFTP configuration fields"""
+        # Create scrollable frame
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
 
-        # Tab 2: Database Configuration
-        self.db_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.db_frame, text="Database")
-        self.create_database_tab()
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
 
-        # Buttons
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X, pady=10)
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
 
-        self.save_button = ttk.Button(button_frame, text="💾 Save Site", command=self.save,
-                                      style="Accent.TButton")
-        self.save_button.pack(side=tk.LEFT, padx=5, ipady=10, ipadx=20)
-
-        self.cancel_button = ttk.Button(button_frame, text="✖ Cancel", command=self.cancel)
-        self.cancel_button.pack(side=tk.LEFT, padx=5, ipady=10, ipadx=20)
-
-    def create_ssh_tab(self):
-        """Create SSH/SFTP configuration tab"""
         # Remote Server
-        remote_frame = ttk.LabelFrame(self.ssh_frame, text="Remote Server (SSH/SFTP)", padding=10)
+        remote_frame = ttk.LabelFrame(scrollable_frame, text="Remote Server (SSH/SFTP)", padding=10)
         remote_frame.pack(fill=tk.X, padx=10, pady=10)
 
         row = 0
@@ -148,13 +201,46 @@ class SiteDialog:
         self.site_url_entry.grid(row=row, column=1, sticky=tk.W, pady=5, padx=5)
         ttk.Label(remote_frame, text="(e.g., https://yoursite.com)", foreground="gray").grid(row=row, column=2, sticky=tk.W, pady=5)
 
+        # Pack canvas and scrollbar
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+    def create_advanced_tab(self, parent):
+        """Create Advanced options fields"""
+        # Create scrollable frame
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Transfer options
+        options_frame = ttk.LabelFrame(scrollable_frame, text="Transfer Options", padding=10)
+        options_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        self.push_newer_only_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(options_frame, text="Push/Pull Newer Files Only (skip files that haven't changed)",
+                       variable=self.push_newer_only_var).pack(anchor=tk.W, pady=5)
+        ttk.Label(options_frame, text="When enabled, only transfers files if they are newer than the destination version.",
+                 foreground="gray", wraplength=600).pack(anchor=tk.W, padx=20, pady=2)
+
         # Pull include paths
-        paths_frame = ttk.LabelFrame(self.ssh_frame, text="Pull Include Paths (one per line)", padding=10)
+        paths_frame = ttk.LabelFrame(scrollable_frame, text="Pull Include Paths (one per line)", padding=10)
         paths_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        self.include_paths_text = scrolledtext.ScrolledText(paths_frame, height=6)
+        self.include_paths_text = scrolledtext.ScrolledText(paths_frame, height=8)
         self.include_paths_text.pack(fill=tk.BOTH, expand=True)
-        self.include_paths_text.insert(1.0, "wp-content/uploads\nwp-content/themes/my-theme\nwp-content/plugins/my-plugin")
+        self.include_paths_text.insert(1.0, "wp-content/uploads/\nwp-content/themes/\nwp-content/plugins/")
+
+        # Pack canvas and scrollbar
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
     def create_database_tab(self):
         """Create database configuration tab with sub-tabs"""
@@ -377,7 +463,8 @@ class SiteDialog:
             local_path = self.local_path_entry.get()
             if not local_path:
                 messagebox.showerror("Error", "Please enter Local Path first")
-                self.notebook.select(0)  # Switch to SSH tab
+                self.notebook.select(0)  # Switch to Site tab
+                self.site_notebook.select(0)  # Switch to Basic Info sub-tab
                 self.local_path_entry.focus()
                 return
 
@@ -458,14 +545,16 @@ class SiteDialog:
                 messagebox.showerror("Missing Information",
                                    "Please fill in all SSH/SFTP fields first:\n\n"
                                    "- Host\n- Port\n- Username\n- Password\n- Remote Path")
-                self.notebook.select(0)  # Switch to SSH tab
+                self.notebook.select(0)  # Switch to Site tab
+                self.site_notebook.select(1)  # Switch to SSH/SFTP sub-tab
                 return
 
             try:
                 port_num = int(port)
             except ValueError:
                 messagebox.showerror("Invalid Port", "Port must be a number")
-                self.notebook.select(0)
+                self.notebook.select(0)  # Switch to Site tab
+                self.site_notebook.select(1)  # Switch to SSH/SFTP sub-tab
                 self.port_entry.focus()
                 return
 
@@ -652,7 +741,8 @@ class SiteDialog:
                 messagebox.showerror("Missing Information",
                                    "Please fill in all SSH/SFTP fields first:\n\n"
                                    "- Host\n- Port\n- Username\n- Password\n- Remote Path")
-                self.notebook.select(0)  # Switch to SSH tab
+                self.notebook.select(0)  # Switch to Site tab
+                self.site_notebook.select(1)  # Switch to SSH/SFTP sub-tab
                 return
 
             if not self.remote_db_name_entry.get():
@@ -664,7 +754,8 @@ class SiteDialog:
                 port_num = int(port)
             except ValueError:
                 messagebox.showerror("Invalid Port", "Port must be a number")
-                self.notebook.select(0)
+                self.notebook.select(0)  # Switch to Site tab
+                self.site_notebook.select(1)  # Switch to SSH/SFTP sub-tab
                 self.port_entry.focus()
                 return
 
@@ -838,6 +929,9 @@ class SiteDialog:
             self.include_paths_text.delete(1.0, tk.END)
             self.include_paths_text.insert(1.0, '\n'.join(self.site.pull_include_paths))
 
+        # Transfer options
+        self.push_newer_only_var.set(self.site.push_newer_only)
+
         # Database configuration (if exists)
         if self.site.database_config:
             db_config = self.site.database_config
@@ -908,7 +1002,8 @@ class SiteDialog:
 
         if not self.host_entry.get():
             messagebox.showerror("Validation Error", "Remote host is required")
-            self.notebook.select(0)
+            self.notebook.select(0)  # Switch to Site tab
+            self.site_notebook.select(1)  # Switch to SSH/SFTP sub-tab
             self.host_entry.focus()
             return
 
@@ -969,6 +1064,7 @@ class SiteDialog:
             remote_username=self.username_entry.get(),
             site_url=self.site_url_entry.get(),
             pull_include_paths=pull_include_paths,
+            push_newer_only=self.push_newer_only_var.get(),
             database_config=database_config
         )
 

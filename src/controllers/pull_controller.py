@@ -100,6 +100,7 @@ class PullController:
 
             # Download files
             total_files = len(files_to_pull)
+            files_skipped = 0
             for i, (remote_file, mod_date) in enumerate(files_to_pull):
                 if progress_callback:
                     # Get relative path for display
@@ -110,6 +111,13 @@ class PullController:
                 # Remove remote_path prefix to get relative path
                 rel_path = remote_file.replace(site.remote_path, '').lstrip('/')
                 local_file = os.path.join(site.local_path, rel_path)
+
+                # Skip if push_newer_only is enabled and remote file is not newer
+                if site.push_newer_only:
+                    if not sftp.is_remote_newer(remote_file, local_file):
+                        self.logger.info(f"Skipping {rel_path} (local is up-to-date)")
+                        files_skipped += 1
+                        continue
 
                 # Download file
                 success, message = sftp.download_file(remote_file, local_file)
@@ -140,6 +148,8 @@ class PullController:
             self.config_service.update_sync_state(sync_state)
 
             success_msg = f"Pull completed: {stats['files_pulled']} files downloaded"
+            if files_skipped > 0:
+                success_msg += f", {files_skipped} skipped"
             if stats['files_failed'] > 0:
                 success_msg += f", {stats['files_failed']} failed"
 
