@@ -3,6 +3,7 @@ Database pull controller for downloading database from remote server
 """
 import os
 import tempfile
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Tuple, Callable, List
@@ -19,6 +20,39 @@ class DBPullController:
     def __init__(self, config_service: ConfigService):
         self.config_service = config_service
         self.logger = setup_logger('db_pull')
+
+    def _save_database_backup(self, source_file: str, db_name: str, backup_type: str, local_root: str) -> str:
+        """
+        Save database backup to /db folder
+
+        Args:
+            source_file: Path to source SQL file
+            db_name: Database name
+            backup_type: 'local' or 'remote'
+            local_root: Local site root path
+
+        Returns:
+            Path to saved backup file
+        """
+        try:
+            # Create /db folder if it doesn't exist
+            db_folder = os.path.join(local_root, 'db')
+            os.makedirs(db_folder, exist_ok=True)
+
+            # Generate filename: [dbname]-[date]-[time]-[local|remote].sql
+            timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+            backup_filename = f"{db_name}-{timestamp}-{backup_type}.sql"
+            backup_path = os.path.join(db_folder, backup_filename)
+
+            # Copy file to backup location
+            shutil.copy2(source_file, backup_path)
+
+            self.logger.info(f"Saved database backup: {backup_path}")
+            return backup_path
+
+        except Exception as e:
+            self.logger.error(f"Failed to save database backup: {e}")
+            return ""
 
     def pull(self, site_id: str, exclude_tables: List[str] = None,
              progress_callback: Callable = None) -> Tuple[bool, str, dict]:
@@ -155,6 +189,15 @@ class DBPullController:
             file_size = os.path.getsize(temp_local_file)
             stats['bytes_transferred'] = file_size
 
+            # Save remote database backup if enabled
+            if site.database_config.save_database_backups:
+                self._save_database_backup(
+                    temp_local_file,
+                    site.database_config.remote_db_name,
+                    'remote',
+                    site.local_path
+                )
+
             # Step 8: Replace table prefixes if different
             current_step += 1
             if progress_callback:
@@ -189,6 +232,15 @@ class DBPullController:
 
                 if success:
                     stats['backup_created'] = backup_file
+
+                    # Save local database backup if enabled
+                    if site.database_config.save_database_backups:
+                        self._save_database_backup(
+                            backup_path,
+                            site.database_config.local_db_name,
+                            'local',
+                            site.local_path
+                        )
                 else:
                     self.logger.warning(f"Failed to create local backup: {msg}")
 

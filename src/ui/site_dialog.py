@@ -201,6 +201,13 @@ class SiteDialog:
         self.site_url_entry.grid(row=row, column=1, sticky=tk.W, pady=5, padx=5)
         ttk.Label(remote_frame, text="(e.g., https://yoursite.com)", foreground="gray").grid(row=row, column=2, sticky=tk.W, pady=5)
 
+        # Test connection button
+        test_button_frame = ttk.LabelFrame(scrollable_frame, text="Connection Test", padding=10)
+        test_button_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        ttk.Button(test_button_frame, text="🔌 Test SSH Connection",
+                  command=self.test_ssh_connection).pack(pady=5, ipady=5, ipadx=10)
+
         # Pack canvas and scrollbar
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -229,6 +236,20 @@ class SiteDialog:
                        variable=self.push_newer_only_var).pack(anchor=tk.W, pady=5)
         ttk.Label(options_frame, text="When enabled, only transfers files if they are newer than the destination version.",
                  foreground="gray", wraplength=600).pack(anchor=tk.W, padx=20, pady=2)
+
+        self.use_compression_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(options_frame, text="Use compression for folders (faster transfer of plugins/themes)",
+                       variable=self.use_compression_var).pack(anchor=tk.W, pady=5)
+        ttk.Label(options_frame, text="When enabled, compresses folders before transfer, then extracts on destination. Much faster for many small files.",
+                 foreground="gray", wraplength=600).pack(anchor=tk.W, padx=20, pady=2)
+
+        # Compress folders
+        compress_frame = ttk.LabelFrame(scrollable_frame, text="Default Folders for 'Push Folder(s)' (one per line)", padding=10)
+        compress_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        self.compress_folders_text = scrolledtext.ScrolledText(compress_frame, height=4)
+        self.compress_folders_text.pack(fill=tk.BOTH, expand=True)
+        self.compress_folders_text.insert(1.0, "wp-content/plugins/\nwp-content/themes/")
 
         # Pull include paths
         paths_frame = ttk.LabelFrame(scrollable_frame, text="Pull Include Paths (one per line)", padding=10)
@@ -262,15 +283,6 @@ class SiteDialog:
         advanced_tab = ttk.Frame(self.db_notebook)
         self.db_notebook.add(advanced_tab, text="Advanced Options")
         self.create_advanced_options_tab(advanced_tab)
-
-        # Test connection buttons
-        test_button_frame = ttk.Frame(self.db_frame, padding=(10, 5))
-        test_button_frame.pack(fill=tk.X, side=tk.BOTTOM)
-
-        ttk.Button(test_button_frame, text="Test Local Connection",
-                  command=self.test_local_connection).pack(side=tk.LEFT, padx=5, ipady=5, ipadx=10)
-        ttk.Button(test_button_frame, text="Test Remote Connection",
-                  command=self.test_remote_connection).pack(side=tk.LEFT, padx=5, ipady=5, ipadx=10)
 
     def create_local_database_tab(self, parent):
         """Create local database configuration fields"""
@@ -450,6 +462,10 @@ class SiteDialog:
         self.require_confirmation_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(safety_frame, text="Require confirmation when pushing to production",
                        variable=self.require_confirmation_var).pack(anchor=tk.W, pady=5)
+
+        self.save_database_backups_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(safety_frame, text="Save database backups to /db folder",
+                       variable=self.save_database_backups_var).pack(anchor=tk.W, pady=5)
 
         # Pack canvas and scrollbar
         canvas.pack(side="left", fill="both", expand=True)
@@ -636,6 +652,62 @@ class SiteDialog:
         except Exception as e:
             messagebox.showerror("Error", f"Auto-detection failed:\n\n{str(e)}")
 
+    def test_ssh_connection(self):
+        """Test SSH connection to remote server"""
+        try:
+            from ..services.ssh_service import SSHService
+
+            # Validate SSH credentials
+            host = self.host_entry.get()
+            port = self.port_entry.get()
+            username = self.username_entry.get()
+            password = self.password_entry.get()
+
+            if not all([host, port, username, password]):
+                messagebox.showerror("Missing Information",
+                                   "Please fill in all SSH fields:\n\n"
+                                   "- Host\n- Port\n- Username\n- Password")
+                return
+
+            try:
+                port_num = int(port)
+            except ValueError:
+                messagebox.showerror("Invalid Port", "Port must be a number")
+                self.port_entry.focus()
+                return
+
+            # Test SSH connection
+            ssh_service = SSHService(host, port_num, username, password)
+
+            try:
+                ssh_service.connect()
+
+                # Test basic command
+                success, output, error = ssh_service.execute_command("pwd")
+
+                ssh_service.disconnect()
+
+                if success:
+                    messagebox.showinfo("Success",
+                                      f"✓ SSH Connection Successful!\n\n"
+                                      f"Server: {host}:{port}\n"
+                                      f"User: {username}\n"
+                                      f"Working directory: {output.strip()}")
+                else:
+                    messagebox.showerror("Connection Error",
+                                       f"SSH connected but command failed:\n\n{error}")
+
+            except Exception as e:
+                messagebox.showerror("Connection Failed",
+                                   f"Failed to connect via SSH:\n\n{str(e)}\n\n"
+                                   f"Please verify:\n"
+                                   f"- Host and port are correct\n"
+                                   f"- Username and password are correct\n"
+                                   f"- Server is accessible from this machine")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Test failed: {str(e)}")
+
     def test_local_connection(self):
         """Test local database connection using WP-CLI"""
         try:
@@ -671,7 +743,8 @@ class SiteDialog:
                     remote_url=self.remote_url_entry.get(),
                     exclude_tables=exclude_tables,
                     backup_before_import=self.backup_before_import_var.get(),
-                    require_confirmation_on_push=self.require_confirmation_var.get()
+                    require_confirmation_on_push=self.require_confirmation_var.get(),
+                    save_database_backups=self.save_database_backups_var.get()
                 )
             except ValueError as e:
                 messagebox.showerror("Validation Error", f"Invalid port number: {e}")
@@ -931,6 +1004,12 @@ class SiteDialog:
 
         # Transfer options
         self.push_newer_only_var.set(self.site.push_newer_only)
+        self.use_compression_var.set(self.site.use_compression)
+
+        # Compress folders
+        if self.site.compress_folders:
+            self.compress_folders_text.delete(1.0, tk.END)
+            self.compress_folders_text.insert(1.0, '\n'.join(self.site.compress_folders))
 
         # Database configuration (if exists)
         if self.site.database_config:
@@ -978,6 +1057,7 @@ class SiteDialog:
             # Options
             self.backup_before_import_var.set(db_config.backup_before_import)
             self.require_confirmation_var.set(db_config.require_confirmation_on_push)
+            self.save_database_backups_var.set(db_config.save_database_backups)
 
         # Check Git status
         self.check_and_set_git_repo(self.site.git_repo_path)
@@ -1013,6 +1093,10 @@ class SiteDialog:
         # Get pull include paths
         paths_text = self.include_paths_text.get(1.0, tk.END).strip()
         pull_include_paths = [p.strip() for p in paths_text.split('\n') if p.strip()]
+
+        # Get compress folders
+        compress_text = self.compress_folders_text.get(1.0, tk.END).strip()
+        compress_folders = [p.strip() for p in compress_text.split('\n') if p.strip()]
 
         # Create database config if any database fields are filled
         database_config = None
@@ -1065,6 +1149,8 @@ class SiteDialog:
             site_url=self.site_url_entry.get(),
             pull_include_paths=pull_include_paths,
             push_newer_only=self.push_newer_only_var.get(),
+            use_compression=self.use_compression_var.get(),
+            compress_folders=compress_folders,
             database_config=database_config
         )
 

@@ -35,6 +35,11 @@ class SiteConfig:
     ])
     pull_include_paths: List[str] = field(default_factory=list)
     push_newer_only: bool = True  # Only push/pull files newer than remote/local
+    use_compression: bool = True  # Compress folders before transfer (faster for many files)
+    compress_folders: List[str] = field(default_factory=lambda: [
+        "wp-content/plugins/",
+        "wp-content/themes/"
+    ])  # Default folders for "Push Folder(s)" operation
     database_config: Optional[DatabaseConfig] = None
     last_db_pushed_at: str = ""
     last_db_pulled_at: str = ""
@@ -57,6 +62,8 @@ class SiteConfig:
             'exclude_patterns': self.exclude_patterns,
             'pull_include_paths': self.pull_include_paths,
             'push_newer_only': self.push_newer_only,
+            'use_compression': self.use_compression,
+            'compress_folders': self.compress_folders,
             'last_db_pushed_at': self.last_db_pushed_at,
             'last_db_pulled_at': self.last_db_pulled_at,
             'created_at': self.created_at,

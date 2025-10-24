@@ -36,6 +36,7 @@ class DatabaseConfig:
     # Safety settings
     backup_before_import: bool = True
     require_confirmation_on_push: bool = True
+    save_database_backups: bool = True  # Save database dumps to /db folder
 
     def to_dict(self) -> dict:
         """Convert to dictionary for YAML serialization"""
@@ -54,7 +55,8 @@ class DatabaseConfig:
             'remote_url': self.remote_url,
             'exclude_tables': self.exclude_tables,
             'backup_before_import': self.backup_before_import,
-            'require_confirmation_on_push': self.require_confirmation_on_push
+            'require_confirmation_on_push': self.require_confirmation_on_push,
+            'save_database_backups': self.save_database_backups
         }
 
     @classmethod
@@ -75,5 +77,6 @@ class DatabaseConfig:
             remote_url=data.get('remote_url', ''),
             exclude_tables=data.get('exclude_tables', []),
             backup_before_import=data.get('backup_before_import', True),
-            require_confirmation_on_push=data.get('require_confirmation_on_push', True)
+            require_confirmation_on_push=data.get('require_confirmation_on_push', True),
+            save_database_backups=data.get('save_database_backups', True)
         )

@@ -61,6 +61,71 @@ class ProgressDialog:
         self.dialog.destroy()
 
 
+class FolderInputDialog:
+    """Custom dialog for folder input with proper styling"""
+
+    def __init__(self, parent, title, message, initial_value=""):
+        self.result = None
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title(title)
+        self.dialog.geometry("500x350")
+
+        # Make modal
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+
+        # Center dialog
+        self.dialog.update_idletasks()
+        x = (self.dialog.winfo_screenwidth() // 2) - (self.dialog.winfo_width() // 2)
+        y = (self.dialog.winfo_screenheight() // 2) - (self.dialog.winfo_height() // 2)
+        self.dialog.geometry(f"+{x}+{y}")
+
+        # Create widgets
+        frame = ttk.Frame(self.dialog, padding=20)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        # Message
+        label = ttk.Label(frame, text=message, wraplength=450)
+        label.pack(pady=(0, 10))
+
+        # Text area
+        self.text = scrolledtext.ScrolledText(frame, height=10, width=60)
+        self.text.pack(fill=tk.BOTH, expand=True, pady=10)
+        if initial_value:
+            self.text.insert(1.0, initial_value)
+
+        # Buttons
+        button_frame = ttk.Frame(frame)
+        button_frame.pack(pady=10)
+
+        ok_btn = ttk.Button(button_frame, text="OK", command=self.on_ok, style="Accent.TButton")
+        ok_btn.pack(side=tk.LEFT, padx=5, ipadx=20, ipady=5)
+
+        cancel_btn = ttk.Button(button_frame, text="Cancel", command=self.on_cancel)
+        cancel_btn.pack(side=tk.LEFT, padx=5, ipadx=20, ipady=5)
+
+        # Make it appear on top
+        self.dialog.lift()
+        self.dialog.attributes('-topmost', True)
+        self.dialog.update()
+        self.dialog.attributes('-topmost', False)
+
+    def on_ok(self):
+        """Handle OK button"""
+        self.result = self.text.get(1.0, tk.END).strip()
+        self.dialog.destroy()
+
+    def on_cancel(self):
+        """Handle Cancel button"""
+        self.result = None
+        self.dialog.destroy()
+
+    def show(self):
+        """Show dialog and return result"""
+        self.dialog.wait_window()
+        return self.result
+
+
 class MainWindow:
     """Main application window"""
 
@@ -71,7 +136,7 @@ class MainWindow:
 
         # Set window icon
         try:
-            icon_path = Path(__file__).parent.parent.parent / 'assets' / 'icon.png'
+            icon_path = Path(__file__).parent.parent.parent / 'assets' / 'WPSyncopath.png'
             if icon_path.exists():
                 icon = tk.PhotoImage(file=str(icon_path))
                 self.root.iconphoto(True, icon)
@@ -88,6 +153,9 @@ class MainWindow:
         self.db_push_controller = DBPushController(self.config_service)
         self.db_pull_controller = DBPullController(self.config_service)
 
+        # Site display name to ID mapping for comboboxes
+        self.site_display_to_id = {}
+
         # Create UI
         self.create_widgets()
         self.refresh_sites()
@@ -100,45 +168,50 @@ class MainWindow:
         # macOS focus fix - activate the app properly
         self.setup_macos_focus_fix()
 
-        # Bind click events to restore focus
-        self.root.bind('<Button-1>', self.ensure_focus)
-        self.root.bind('<FocusIn>', self.on_focus_in)
-
     def setup_macos_focus_fix(self):
         """Setup macOS-specific focus handling"""
         import platform
+        import logging
+        logger = logging.getLogger('wp-deploy')
+
         if platform.system() == 'Darwin':  # macOS
-            # Force window to front and activate
-            self.root.lift()
-            self.root.attributes('-topmost', True)
-            self.root.after(100, lambda: self.root.attributes('-topmost', False))
-
-            # Try to activate the application using AppleScript
+            # Try PyObjC approach for proper first-mouse handling
             try:
-                import subprocess
-                script = 'tell application "System Events" to set frontmost of first process whose unix id is {} to true'.format(
-                    os.getpid()
-                )
-                subprocess.run(['osascript', '-e', script], capture_output=True)
-            except Exception as e:
-                import logging
-                logger = logging.getLogger('wp-deploy')
-                logger.debug(f"Could not activate app via AppleScript: {e}")
+                from AppKit import NSApp
 
-    def ensure_focus(self, event=None):
-        """Ensure the window has focus when clicked"""
-        # Only process clicks on the window itself, not its children
-        if event and event.widget == self.root:
-            self.root.lift()
-            self.root.focus_force()
+                # Update and prepare window
+                self.root.update_idletasks()
+                self.root.update()
 
-    def on_focus_in(self, event=None):
-        """Handle focus gained event"""
-        # Update window to ensure proper event processing
-        try:
-            self.root.update_idletasks()
-        except:
-            pass
+                # Activate the application ignoring other apps - just once at startup
+                NSApp.activateIgnoringOtherApps_(True)
+
+                # Bring to front
+                self.root.lift()
+                self.root.attributes('-topmost', True)
+                self.root.after(100, lambda: self.root.attributes('-topmost', False))
+
+                logger.info("macOS focus fix applied using PyObjC")
+
+            except ImportError:
+                # PyObjC not available, use fallback approach
+                logger.warning("PyObjC not available - install pyobjc-framework-Cocoa for better macOS support")
+
+                # Simpler approach without PyObjC
+                self.root.lift()
+                self.root.attributes('-topmost', True)
+                self.root.after(100, lambda: self.root.attributes('-topmost', False))
+                self.root.focus_force()
+
+                # Use osascript to activate
+                try:
+                    import subprocess
+                    subprocess.Popen([
+                        'osascript', '-e',
+                        f'tell application "System Events" to set frontmost of first process whose unix id is {os.getpid()} to true'
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except:
+                    pass
 
     def create_widgets(self):
         """Create all UI widgets"""
@@ -151,18 +224,18 @@ class MainWindow:
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
         # Create tabs
+        self.config_frame = ttk.Frame(self.notebook)
         self.push_frame = ttk.Frame(self.notebook)
         self.pull_frame = ttk.Frame(self.notebook)
-        self.config_frame = ttk.Frame(self.notebook)
 
+        self.notebook.add(self.config_frame, text="Configuration")
         self.notebook.add(self.push_frame, text="Push to Remote")
         self.notebook.add(self.pull_frame, text="Pull from Remote")
-        self.notebook.add(self.config_frame, text="Configuration")
 
         # Setup each tab
+        self.setup_config_tab()
         self.setup_push_tab()
         self.setup_pull_tab()
-        self.setup_config_tab()
 
         # Add log viewer at bottom
         log_frame = ttk.LabelFrame(main_container, text="Activity Log", padding=5)
@@ -178,16 +251,17 @@ class MainWindow:
 
     def setup_push_tab(self):
         """Setup push tab"""
-        # Site selection
-        select_frame = ttk.LabelFrame(self.push_frame, text="Select Site", padding=10)
+        # Current site indicator
+        select_frame = ttk.LabelFrame(self.push_frame, text="Current Site", padding=10)
         select_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        ttk.Label(select_frame, text="Site:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.push_site_combo = ttk.Combobox(select_frame, state="readonly", width=40)
-        self.push_site_combo.grid(row=0, column=1, sticky=tk.W, pady=5, padx=5)
-        self.push_site_combo.bind('<<ComboboxSelected>>', self.on_push_site_selected)
+        info_label = ttk.Label(select_frame, text="ℹ️ Select a site from the Configuration tab",
+                              foreground="gray", font=("", 10))
+        info_label.pack(pady=5)
 
-        ttk.Button(select_frame, text="Refresh", command=self.refresh_sites).grid(row=0, column=2, padx=5)
+        self.push_site_label = ttk.Label(select_frame, text="No site selected",
+                                        font=("", 11, "bold"))
+        self.push_site_label.pack(pady=5)
 
         # Preview frame
         preview_frame = ttk.LabelFrame(self.push_frame, text="Files to Push", padding=10)
@@ -204,13 +278,9 @@ class MainWindow:
         button_frame = ttk.Frame(self.push_frame)
         button_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        self.push_button = ttk.Button(button_frame, text="▲ PUSH UPDATED GIT FILES", command=self.do_push,
+        self.push_files_button = ttk.Button(button_frame, text="▲ PUSH FILES", command=self.show_push_files_menu,
                                       style="Accent.TButton")
-        self.push_button.pack(side=tk.LEFT, padx=5, ipady=12, ipadx=25)
-
-        self.push_all_button = ttk.Button(button_frame, text="▲ PUSH ALL FILES", command=self.do_push_all,
-                                          style="Accent.TButton")
-        self.push_all_button.pack(side=tk.LEFT, padx=5, ipady=12, ipadx=25)
+        self.push_files_button.pack(side=tk.LEFT, padx=5, ipady=12, ipadx=25)
 
         self.db_push_button = ttk.Button(button_frame, text="🗄️ PUSH DATABASE", command=self.do_db_push,
                                          style="Accent.TButton")
@@ -222,64 +292,65 @@ class MainWindow:
 
     def setup_pull_tab(self):
         """Setup pull tab"""
-        # Site selection
-        select_frame = ttk.LabelFrame(self.pull_frame, text="Select Site", padding=10)
+        # Current site indicator
+        select_frame = ttk.LabelFrame(self.pull_frame, text="Current Site", padding=10)
         select_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        ttk.Label(select_frame, text="Site:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.pull_site_combo = ttk.Combobox(select_frame, state="readonly", width=40)
-        self.pull_site_combo.grid(row=0, column=1, sticky=tk.W, pady=5, padx=5)
+        info_label = ttk.Label(select_frame, text="ℹ️ Select a site from the Configuration tab",
+                              foreground="gray", font=("", 10))
+        info_label.pack(pady=5)
 
-        # Date range
-        date_frame = ttk.LabelFrame(self.pull_frame, text="Date Range", padding=10)
-        date_frame.pack(fill=tk.X, padx=10, pady=10)
+        self.pull_site_label = ttk.Label(select_frame, text="No site selected",
+                                        font=("", 11, "bold"))
+        self.pull_site_label.pack(pady=5)
 
-        ttk.Label(date_frame, text="Start Date (YYYY-MM-DD):").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.start_date_entry = ttk.Entry(date_frame, width=20)
+        # Date range (initially hidden)
+        self.date_frame = ttk.LabelFrame(self.pull_frame, text="Date Range", padding=10)
+
+        ttk.Label(self.date_frame, text="Start Date (YYYY-MM-DD):").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.start_date_entry = ttk.Entry(self.date_frame, width=20)
         self.start_date_entry.grid(row=0, column=1, sticky=tk.W, pady=5, padx=5)
         # Default to 7 days ago
         default_start = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
         self.start_date_entry.insert(0, default_start)
 
-        ttk.Label(date_frame, text="End Date (YYYY-MM-DD):").grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.end_date_entry = ttk.Entry(date_frame, width=20)
+        ttk.Label(self.date_frame, text="End Date (YYYY-MM-DD):").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.end_date_entry = ttk.Entry(self.date_frame, width=20)
         self.end_date_entry.grid(row=1, column=1, sticky=tk.W, pady=5, padx=5)
         # Default to today
         default_end = datetime.now().strftime("%Y-%m-%d")
         self.end_date_entry.insert(0, default_end)
 
         # Quick date buttons
-        quick_frame = ttk.Frame(date_frame)
+        quick_frame = ttk.Frame(self.date_frame)
         quick_frame.grid(row=2, column=0, columnspan=2, pady=5)
 
         ttk.Button(quick_frame, text="Last 7 Days", command=lambda: self.set_date_range(7)).pack(side=tk.LEFT, padx=2)
         ttk.Button(quick_frame, text="Last 30 Days", command=lambda: self.set_date_range(30)).pack(side=tk.LEFT, padx=2)
 
-        # Include paths
-        paths_frame = ttk.LabelFrame(self.pull_frame, text="Include Paths (one per line)", padding=10)
-        paths_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Include paths (initially hidden)
+        self.paths_frame = ttk.LabelFrame(self.pull_frame, text="Include Paths (one per line)", padding=10)
 
-        self.pull_paths_text = scrolledtext.ScrolledText(paths_frame, height=6, width=80)
+        self.pull_paths_text = scrolledtext.ScrolledText(self.paths_frame, height=6, width=80)
         self.pull_paths_text.pack(fill=tk.BOTH, expand=True)
 
-        # Preview frame
-        preview_frame = ttk.LabelFrame(self.pull_frame, text="Files to Pull", padding=10)
-        preview_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Preview frame (initially hidden)
+        self.preview_frame = ttk.LabelFrame(self.pull_frame, text="Files to Pull", padding=10)
 
-        preview_pull_btn = ttk.Button(preview_frame, text="👁️ Preview Files", command=self.preview_pull,
+        preview_pull_btn = ttk.Button(self.preview_frame, text="👁️ Preview Files", command=self.preview_pull,
                                      style="Accent.TButton")
         preview_pull_btn.pack(pady=5, ipady=8, ipadx=15)
 
-        self.pull_preview_text = scrolledtext.ScrolledText(preview_frame, height=8, width=80)
+        self.pull_preview_text = scrolledtext.ScrolledText(self.preview_frame, height=8, width=80)
         self.pull_preview_text.pack(fill=tk.BOTH, expand=True, pady=5)
 
         # Action buttons
         button_frame = ttk.Frame(self.pull_frame)
         button_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        self.pull_button = ttk.Button(button_frame, text="▼ PULL FILES", command=self.do_pull,
+        self.pull_files_button = ttk.Button(button_frame, text="▼ PULL FILES", command=self.show_pull_files_menu,
                                       style="Accent.TButton")
-        self.pull_button.pack(side=tk.LEFT, padx=5, ipady=12, ipadx=25)
+        self.pull_files_button.pack(side=tk.LEFT, padx=5, ipady=12, ipadx=25)
 
         self.db_pull_button = ttk.Button(button_frame, text="🗄️ PULL DATABASE", command=self.do_db_pull,
                                          style="Accent.TButton")
@@ -335,11 +406,6 @@ class MainWindow:
         """Refresh site list in all dropdowns and radio buttons"""
         sites = self.config_service.get_all_sites()
 
-        # Update comboboxes
-        site_names = [f"{site.name} ({site.id})" for site in sites]
-        self.push_site_combo['values'] = site_names
-        self.pull_site_combo['values'] = site_names
-
         # Clear existing radio buttons
         for widget in self.sites_scroll_frame.winfo_children():
             widget.destroy()
@@ -357,49 +423,66 @@ class MainWindow:
                 text=f"{site.name} - {site.remote_host}",
                 variable=self.selected_site_var,
                 value=site.id,
-                style="TRadiobutton"
+                style="TRadiobutton",
+                command=self.on_site_selected
             )
             rb.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-            # Preview button if URL is set
+            # Preview buttons
+            # Remote preview button if URL is set
             if site.site_url:
                 preview_btn = ttk.Button(
                     site_frame,
-                    text="🌐 Preview",
+                    text="🌐 Remote",
                     command=lambda url=site.site_url: self.open_site_url(url),
-                    width=12
+                    width=10
                 )
                 preview_btn.pack(side=tk.RIGHT, padx=2)
+
+            # Local preview button if local URL is set
+            local_url = None
+            if site.database_config and site.database_config.local_url:
+                local_url = site.database_config.local_url
+
+            if local_url:
+                local_preview_btn = ttk.Button(
+                    site_frame,
+                    text="💻 Local",
+                    command=lambda url=local_url: self.open_site_url(url),
+                    width=10
+                )
+                local_preview_btn.pack(side=tk.RIGHT, padx=2)
 
             self.site_radiobuttons.append(rb)
 
         # Select first site if available
         if sites:
             self.selected_site_var.set(sites[0].id)
-            self.push_site_combo.current(0)
-            self.pull_site_combo.current(0)
-            self.on_push_site_selected(None)
+            self.on_site_selected()
 
-    def on_push_site_selected(self, event):
-        """Handle site selection in push tab"""
-        # Load site's pull include paths for reference
-        site_id = self.get_selected_site_id(self.push_site_combo)
-        if site_id:
-            site = self.config_service.get_site(site_id)
-            if site:
-                self.push_preview_text.delete(1.0, tk.END)
-                self.push_preview_text.insert(1.0, f"Site: {site.name}\n")
-                self.push_preview_text.insert(tk.END, f"Local: {site.local_path}\n")
-                self.push_preview_text.insert(tk.END, f"Remote: {site.remote_host}:{site.remote_path}\n\n")
-                self.push_preview_text.insert(tk.END, "Click 'Preview Files' to see files that will be pushed.")
+    def on_site_selected(self):
+        """Handle site selection - update all tabs"""
+        site_id = self.selected_site_var.get()
+        if not site_id:
+            return
 
-    def get_selected_site_id(self, combo):
-        """Extract site ID from combobox selection"""
-        selection = combo.get()
-        if selection:
-            # Extract ID from "Name (ID)" format
-            return selection.split('(')[-1].rstrip(')')
-        return None
+        site = self.config_service.get_site(site_id)
+        if not site:
+            return
+
+        # Update Push tab label
+        display_text = f"{site.name} - {site.remote_host}"
+        self.push_site_label.config(text=display_text)
+
+        # Update Pull tab label
+        self.pull_site_label.config(text=display_text)
+
+        # Update push preview
+        self.push_preview_text.delete(1.0, tk.END)
+        self.push_preview_text.insert(1.0, f"Site: {site.name}\n")
+        self.push_preview_text.insert(tk.END, f"Local: {site.local_path}\n")
+        self.push_preview_text.insert(tk.END, f"Remote: {site.remote_host}:{site.remote_path}\n\n")
+        self.push_preview_text.insert(tk.END, "Click 'Preview Files' to see files that will be pushed.")
 
     def set_date_range(self, days):
         """Set date range to last N days"""
@@ -414,7 +497,7 @@ class MainWindow:
 
     def preview_push(self):
         """Preview files that will be pushed"""
-        site_id = self.get_selected_site_id(self.push_site_combo)
+        site_id = self.selected_site_var.get()
         if not site_id:
             messagebox.showwarning("Warning", "Please select a site")
             return
@@ -443,7 +526,7 @@ class MainWindow:
 
     def preview_pull(self):
         """Preview files that will be pulled"""
-        site_id = self.get_selected_site_id(self.pull_site_combo)
+        site_id = self.selected_site_var.get()
         if not site_id:
             messagebox.showwarning("Warning", "Please select a site")
             return
@@ -493,6 +576,67 @@ class MainWindow:
 
         Thread(target=preview_thread, daemon=True).start()
 
+    def show_pull_files_menu(self):
+        """Show menu with pull file options"""
+        site_id = self.selected_site_var.get()
+        if not site_id:
+            messagebox.showwarning("Warning", "Please select a site from the Configuration tab")
+            return
+
+        # Create a popup menu
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="▼ Pull Files by Date", command=self.do_pull_by_date)
+        menu.add_command(label="📦 Pull Files by Folder", command=self.do_pull_folders)
+
+        # Get button position to display menu near it
+        try:
+            x = self.pull_files_button.winfo_rootx()
+            y = self.pull_files_button.winfo_rooty() + self.pull_files_button.winfo_height()
+            menu.post(x, y)
+        except:
+            # Fallback if position can't be determined
+            menu.post(self.root.winfo_pointerx(), self.root.winfo_pointery())
+
+    def show_pull_date_ui(self):
+        """Show date range and paths UI for pull by date"""
+        # Hide any existing frames first
+        self.date_frame.pack_forget()
+        self.paths_frame.pack_forget()
+        self.preview_frame.pack_forget()
+
+        # Show date range and paths frames
+        self.date_frame.pack(fill=tk.X, padx=10, pady=10, after=self.pull_site_label.master)
+        self.paths_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.preview_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+    def hide_pull_ui(self):
+        """Hide all pull UI sections"""
+        self.date_frame.pack_forget()
+        self.paths_frame.pack_forget()
+        self.preview_frame.pack_forget()
+
+    def show_push_files_menu(self):
+        """Show menu with push file options"""
+        site_id = self.selected_site_var.get()
+        if not site_id:
+            messagebox.showwarning("Warning", "Please select a site from the Configuration tab")
+            return
+
+        # Create a popup menu
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="▲ Push Updated Git Files", command=self.do_push)
+        menu.add_command(label="▲ Push All Files", command=self.do_push_all)
+        menu.add_command(label="📦 Push Folder(s)", command=self.do_push_folders)
+
+        # Get button position to display menu near it
+        try:
+            x = self.push_files_button.winfo_rootx()
+            y = self.push_files_button.winfo_rooty() + self.push_files_button.winfo_height()
+            menu.post(x, y)
+        except:
+            # Fallback if position can't be determined
+            menu.post(self.root.winfo_pointerx(), self.root.winfo_pointery())
+
     def do_push(self):
         """Execute push operation"""
         import logging
@@ -500,10 +644,10 @@ class MainWindow:
 
         logger.info("=== PUSH OPERATION STARTED ===")
 
-        site_id = self.get_selected_site_id(self.push_site_combo)
+        site_id = self.selected_site_var.get()
         if not site_id:
             logger.warning("No site selected for push operation")
-            messagebox.showwarning("Warning", "Please select a site")
+            messagebox.showwarning("Warning", "Please select a site from the Configuration tab")
             return
 
         site = self.config_service.get_site(site_id)
@@ -516,7 +660,7 @@ class MainWindow:
             return
 
         # Visual feedback - button clicked
-        self.push_button.config(state=tk.DISABLED, text="⏳ PUSHING...")
+        self.push_files_button.config(state=tk.DISABLED, text="⏳ PUSHING...")
         self.push_status.config(text="Initializing push...")
         logger.info("Starting push operation...")
 
@@ -529,7 +673,7 @@ class MainWindow:
             success, message, stats = self.push_controller.push(site_id, progress_callback)
 
             def update_ui():
-                self.push_button.config(state=tk.NORMAL, text="▲ PUSH UPDATED GIT FILES")
+                self.push_files_button.config(state=tk.NORMAL, text="▲ PUSH FILES")
                 self.push_status.config(text=message)
 
                 if success:
@@ -555,10 +699,10 @@ class MainWindow:
 
         logger.info("=== PUSH ALL OPERATION STARTED ===")
 
-        site_id = self.get_selected_site_id(self.push_site_combo)
+        site_id = self.selected_site_var.get()
         if not site_id:
             logger.warning("No site selected for push all operation")
-            messagebox.showwarning("Warning", "Please select a site")
+            messagebox.showwarning("Warning", "Please select a site from the Configuration tab")
             return
 
         site = self.config_service.get_site(site_id)
@@ -571,7 +715,7 @@ class MainWindow:
             return
 
         # Visual feedback - button clicked
-        self.push_all_button.config(state=tk.DISABLED, text="⏳ PUSHING ALL...")
+        self.push_files_button.config(state=tk.DISABLED, text="⏳ PUSHING ALL...")
         self.push_status.config(text="Initializing push all...")
         logger.info("Starting push all operation...")
 
@@ -584,7 +728,7 @@ class MainWindow:
             success, message, stats = self.push_controller.push_all(site_id, progress_callback)
 
             def update_ui():
-                self.push_all_button.config(state=tk.NORMAL, text="▲ PUSH ALL FILES")
+                self.push_files_button.config(state=tk.NORMAL, text="▲ PUSH FILES")
                 self.push_status.config(text=message)
 
                 if success:
@@ -603,11 +747,24 @@ class MainWindow:
 
         Thread(target=push_all_thread, daemon=True).start()
 
-    def do_pull(self):
-        """Execute pull operation"""
-        site_id = self.get_selected_site_id(self.pull_site_combo)
+    def do_pull_by_date(self):
+        """Execute pull by date operation - shows date UI first"""
+        site_id = self.selected_site_var.get()
         if not site_id:
-            messagebox.showwarning("Warning", "Please select a site")
+            messagebox.showwarning("Warning", "Please select a site from the Configuration tab")
+            return
+
+        # Show the date range UI
+        self.show_pull_date_ui()
+
+        # Switch to pull tab if not already there
+        self.notebook.select(self.pull_frame)
+
+    def do_pull(self):
+        """Execute pull operation (called from preview button)"""
+        site_id = self.selected_site_var.get()
+        if not site_id:
+            messagebox.showwarning("Warning", "Please select a site from the Configuration tab")
             return
 
         # Parse dates
@@ -632,7 +789,7 @@ class MainWindow:
         if not messagebox.askyesno("Confirm", "Pull files from remote server? This will overwrite local files."):
             return
 
-        self.pull_button.config(state=tk.DISABLED)
+        self.pull_files_button.config(state=tk.DISABLED, text="⏳ PULLING...")
         self.pull_status.config(text="Pulling...")
 
         def pull_thread():
@@ -643,7 +800,7 @@ class MainWindow:
             success, message, stats = self.pull_controller.pull(site_id, start_date, end_date, include_paths, progress_callback)
 
             def update_ui():
-                self.pull_button.config(state=tk.NORMAL)
+                self.pull_files_button.config(state=tk.NORMAL, text="▼ PULL FILES")
                 self.pull_status.config(text=message)
 
                 if success:
@@ -660,15 +817,190 @@ class MainWindow:
 
         Thread(target=pull_thread, daemon=True).start()
 
+    def do_pull_folders(self):
+        """Pull specific folders using compression"""
+        import logging
+        logger = logging.getLogger('wp-deploy')
+
+        logger.info("=== PULL FOLDERS OPERATION STARTED ===")
+
+        site_id = self.selected_site_var.get()
+        if not site_id:
+            messagebox.showwarning("Warning", "Please select a site")
+            return
+
+        site = self.config_service.get_site(site_id)
+        if not site:
+            messagebox.showerror("Error", "Selected site not found")
+            return
+
+        # Get default folders from site config
+        default_folders = '\n'.join(site.compress_folders) if site.compress_folders else "wp-content/"
+
+        # Prompt user for folders to pull using custom dialog
+        dialog = FolderInputDialog(
+            self.root,
+            "Pull Folder(s)",
+            "Enter folders to pull (one per line):\n\nFolders will be compressed on remote, transferred, and extracted locally (overwriting existing files).",
+            default_folders
+        )
+        folders_input = dialog.show()
+
+        if not folders_input:
+            logger.info("Pull folders cancelled by user")
+            return
+
+        # Parse folders
+        folders = [f.strip() for f in folders_input.split('\n') if f.strip()]
+
+        if not folders:
+            messagebox.showwarning("Warning", "No folders specified")
+            return
+
+        # Confirm operation
+        folder_list = '\n'.join([f"  • {f}" for f in folders])
+        if not messagebox.askyesno("Confirm Pull Folders",
+                                   f"Pull the following folders from remote?\n\n{folder_list}\n\n"
+                                   f"This will:\n"
+                                   f"1. Compress each folder on remote\n"
+                                   f"2. Transfer to local\n"
+                                   f"3. Extract and overwrite locally\n\n"
+                                   f"Continue?"):
+            logger.info("Pull folders cancelled by user")
+            return
+
+        # Disable button during operation
+        self.pull_files_button.config(state=tk.DISABLED, text="⏳ PULLING FOLDERS...")
+        self.pull_status.config(text="Pulling folders...")
+
+        def pull_thread():
+            def progress_callback(current, total, message):
+                status_text = f"Folder {current}/{total}: {message}"
+                self.root.after(0, lambda: self.pull_status.config(text=status_text))
+                logger.info(f"Progress: Folder {current}/{total} - {message}")
+
+            success, message, stats = self.pull_controller.pull_folders(site_id, folders, progress_callback)
+
+            def update_ui():
+                self.pull_files_button.config(state=tk.NORMAL, text="▼ PULL FILES")
+                if success:
+                    self.pull_status.config(text=f"✓ {message}")
+                    logger.info(f"Pull folders completed: {message}")
+
+                    # Show detailed results
+                    result = f"Pull folders completed!\n\n"
+                    result += f"Folders pulled: {stats.get('folders_pulled', 0)}\n"
+                    result += f"Bytes transferred: {stats.get('bytes_transferred', 0):,}\n"
+                    if stats.get('folders_failed', 0) > 0:
+                        result += f"Folders failed: {stats['folders_failed']}\n"
+                    messagebox.showinfo("Success", result)
+                else:
+                    self.pull_status.config(text=f"✗ {message}")
+                    logger.error(f"Pull folders failed: {message}")
+                    messagebox.showerror("Error", f"Pull folders failed:\n\n{message}")
+
+                self.refresh_sites()
+
+            self.root.after(0, update_ui)
+
+        Thread(target=pull_thread, daemon=True).start()
+
+    def do_push_folders(self):
+        """Push specific folders using compression"""
+        import logging
+        logger = logging.getLogger('wp-deploy')
+
+        logger.info("=== PUSH FOLDERS OPERATION STARTED ===")
+
+        site_id = self.selected_site_var.get()
+        if not site_id:
+            messagebox.showwarning("Warning", "Please select a site")
+            return
+
+        site = self.config_service.get_site(site_id)
+        if not site:
+            messagebox.showerror("Error", "Selected site not found")
+            return
+
+        # Get default folders from site config
+        default_folders = '\n'.join(site.compress_folders) if site.compress_folders else "wp-content/"
+
+        # Prompt user for folders to push using custom dialog
+        dialog = FolderInputDialog(
+            self.root,
+            "Push Folder(s)",
+            "Enter folders to push (one per line):\n\nFolders will be compressed, transferred, and extracted on remote (overwriting existing files).",
+            default_folders
+        )
+        folders_input = dialog.show()
+
+        if not folders_input:
+            logger.info("Push folders cancelled by user")
+            return
+
+        # Parse folders
+        folders = [f.strip() for f in folders_input.split('\n') if f.strip()]
+
+        if not folders:
+            messagebox.showwarning("Warning", "No folders specified")
+            return
+
+        # Confirm operation
+        folder_list = '\n'.join([f"  • {f}" for f in folders])
+        if not messagebox.askyesno("Confirm Push Folders",
+                                   f"Push the following folders to remote?\n\n{folder_list}\n\n"
+                                   f"This will:\n"
+                                   f"1. Compress each folder locally\n"
+                                   f"2. Transfer to remote\n"
+                                   f"3. Extract and overwrite on remote\n\n"
+                                   f"Continue?"):
+            logger.info("Push folders cancelled by user")
+            return
+
+        # Disable button during operation
+        self.push_files_button.config(state=tk.DISABLED, text="⏳ PUSHING FOLDERS...")
+        self.push_status.config(text="Pushing folders...")
+
+        def push_thread():
+            def progress_callback(current, total, message):
+                status_text = f"Folder {current}/{total}: {message}"
+                self.root.after(0, lambda: self.push_status.config(text=status_text))
+                logger.info(f"Progress: Folder {current}/{total} - {message}")
+
+            success, message, stats = self.push_controller.push_folders(site_id, folders, progress_callback)
+
+            def update_ui():
+                self.push_files_button.config(state=tk.NORMAL, text="▲ PUSH FILES")
+                if success:
+                    self.push_status.config(text=f"✓ {message}")
+                    logger.info(f"Push folders completed: {message}")
+
+                    # Show detailed results
+                    result = f"Push folders completed!\n\n"
+                    result += f"Folders pushed: {stats.get('folders_pushed', 0)}\n"
+                    result += f"Bytes transferred: {stats.get('bytes_transferred', 0):,}\n"
+                    if stats.get('folders_failed', 0) > 0:
+                        result += f"Folders failed: {stats['folders_failed']}\n"
+                    messagebox.showinfo("Success", result)
+                else:
+                    self.push_status.config(text=f"✗ {message}")
+                    logger.error(f"Push folders failed: {message}")
+                    messagebox.showerror("Error", f"Push folders failed:\n\n{message}")
+
+                self.refresh_sites()
+
+            self.root.after(0, update_ui)
+
+        Thread(target=push_thread, daemon=True).start()
+
     def do_db_push(self):
         """Push database to remote"""
         # Get selected site
-        selection = self.push_site_combo.get()
-        if not selection:
-            messagebox.showwarning("No Selection", "Please select a site first")
+        site_id = self.selected_site_var.get()
+        if not site_id:
+            messagebox.showwarning("No Selection", "Please select a site from the Configuration tab")
             return
 
-        site_id = selection.split('(')[1].rstrip(')')
         site = self.config_service.get_site(site_id)
 
         # Check if database is configured
@@ -724,12 +1056,11 @@ class MainWindow:
     def do_db_pull(self):
         """Pull database from remote"""
         # Get selected site
-        selection = self.pull_site_combo.get()
-        if not selection:
-            messagebox.showwarning("No Selection", "Please select a site first")
+        site_id = self.selected_site_var.get()
+        if not site_id:
+            messagebox.showwarning("No Selection", "Please select a site from the Configuration tab")
             return
 
-        site_id = selection.split('(')[1].rstrip(')')
         site = self.config_service.get_site(site_id)
 
         # Check if database is configured

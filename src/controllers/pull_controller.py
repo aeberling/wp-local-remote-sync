@@ -2,10 +2,13 @@
 Pull controller for downloading files from remote server
 """
 import os
+import zipfile
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import List, Callable, Tuple
 from ..services.sftp_service import SFTPService
+from ..services.ssh_service import SSHService
 from ..services.config_service import ConfigService
 from ..models.sync_state import OperationState
 from ..utils.patterns import filter_files
@@ -220,3 +223,175 @@ class PullController:
 
         except Exception as e:
             return False, str(e), []
+
+    def pull_folders(self, site_id: str, folders: List[str], progress_callback: Callable = None) -> Tuple[bool, str, dict]:
+        """
+        Pull specific folders by compressing on remote, transferring, and extracting locally
+
+        Args:
+            site_id: Site identifier
+            folders: List of folder paths relative to remote_path
+            progress_callback: Optional callback(current, total, message)
+
+        Returns:
+            Tuple of (success, message, stats_dict)
+        """
+        self.logger.info(f"Starting pull folders operation for site: {site_id}")
+
+        # Get site configuration
+        site = self.config_service.get_site(site_id)
+        if not site:
+            return False, f"Site not found: {site_id}", {}
+
+        # Get password
+        password = self.config_service.get_password(site_id)
+        if not password:
+            return False, "Password not found in keyring", {}
+
+        stats = {
+            'folders_pulled': 0,
+            'folders_failed': 0,
+            'bytes_transferred': 0,
+            'folders': []
+        }
+
+        try:
+            # Connect to SFTP and SSH
+            sftp = SFTPService(site.remote_host, site.remote_port, site.remote_username, password)
+            sftp.connect()
+
+            ssh = SSHService(site.remote_host, site.remote_port, site.remote_username, password)
+            ssh.connect()
+
+            total_folders = len(folders)
+
+            for i, folder in enumerate(folders):
+                folder = folder.strip()
+                if not folder:
+                    continue
+
+                if progress_callback:
+                    progress_callback(i + 1, total_folders, f"Processing {folder}")
+
+                # Ensure folder path doesn't start with /
+                if folder.startswith('/'):
+                    folder = folder[1:]
+
+                remote_folder = os.path.join(site.remote_path, folder).replace('\\', '/')
+
+                # Check if remote folder exists
+                if not sftp.path_exists(remote_folder):
+                    self.logger.warning(f"Remote folder not found: {remote_folder}")
+                    stats['folders_failed'] += 1
+                    if progress_callback:
+                        progress_callback(i + 1, total_folders, f"❌ Folder not found: {folder}")
+                    continue
+
+                # Count files on remote (estimate)
+                if progress_callback:
+                    progress_callback(i + 1, total_folders, f"Counting files in {folder}...")
+
+                count_command = f"find {remote_folder} -type f | wc -l"
+                success, output, error = ssh.execute_command(count_command)
+                file_count = int(output.strip()) if success and output.strip().isdigit() else 0
+
+                # Create zip file on remote
+                if progress_callback:
+                    progress_callback(i + 1, total_folders, f"Compressing {folder} on remote ({file_count} files)")
+
+                timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+                zip_filename = f"pull-folder-{site_id}-{i}-{timestamp}.zip"
+                remote_zip_path = f"/tmp/{zip_filename}"
+
+                # Compress folder on remote
+                # Change to remote_path directory and zip relative paths to maintain structure
+                compress_command = f"cd {site.remote_path} && zip -r {remote_zip_path} {folder}"
+                success, output, error = ssh.execute_command(compress_command)
+
+                if not success:
+                    self.logger.error(f"Failed to compress {folder}: {error}")
+                    stats['folders_failed'] += 1
+                    if progress_callback:
+                        progress_callback(i + 1, total_folders, f"❌ Compression failed: {folder}")
+                    continue
+
+                # Get zip file size
+                size_command = f"stat -f%z {remote_zip_path} 2>/dev/null || stat -c%s {remote_zip_path} 2>/dev/null"
+                success, output, error = ssh.execute_command(size_command)
+                zip_size = int(output.strip()) if success and output.strip().isdigit() else 0
+                zip_size_mb = zip_size / (1024 * 1024) if zip_size > 0 else 0
+
+                # Download zip file
+                if progress_callback:
+                    progress_callback(i + 1, total_folders, f"Downloading {folder} ({zip_size_mb:.1f} MB)")
+
+                local_zip_path = os.path.join(tempfile.gettempdir(), zip_filename)
+                success, message = sftp.download_file(remote_zip_path, local_zip_path)
+
+                if not success:
+                    self.logger.error(f"Failed to download zip for {folder}: {message}")
+                    stats['folders_failed'] += 1
+                    if progress_callback:
+                        progress_callback(i + 1, total_folders, f"❌ Download failed: {folder}")
+                    # Clean up remote zip
+                    ssh.execute_command(f"rm -f {remote_zip_path}")
+                    continue
+
+                stats['bytes_transferred'] += zip_size if zip_size > 0 else os.path.getsize(local_zip_path)
+
+                # Extract locally
+                if progress_callback:
+                    progress_callback(i + 1, total_folders, f"Extracting {folder} locally...")
+
+                try:
+                    with zipfile.ZipFile(local_zip_path, 'r') as zipf:
+                        # Extract to local_path, which will overwrite existing files
+                        zipf.extractall(site.local_path)
+
+                    self.logger.info(f"Successfully extracted {folder} to {site.local_path}")
+
+                except Exception as e:
+                    self.logger.error(f"Failed to extract {folder}: {e}")
+                    stats['folders_failed'] += 1
+                    if progress_callback:
+                        progress_callback(i + 1, total_folders, f"❌ Extraction failed: {folder}")
+                    # Clean up
+                    ssh.execute_command(f"rm -f {remote_zip_path}")
+                    if os.path.exists(local_zip_path):
+                        os.remove(local_zip_path)
+                    continue
+
+                # Clean up remote zip file
+                if progress_callback:
+                    progress_callback(i + 1, total_folders, f"Cleaning up {folder}...")
+                ssh.execute_command(f"rm -f {remote_zip_path}")
+
+                # Clean up local temp file
+                if os.path.exists(local_zip_path):
+                    os.remove(local_zip_path)
+
+                stats['folders_pulled'] += 1
+                stats['folders'].append(folder)
+                self.logger.info(f"Successfully pulled folder: {folder}")
+
+                if progress_callback:
+                    progress_callback(i + 1, total_folders, f"✓ Completed {folder}")
+
+            # Disconnect
+            sftp.disconnect()
+            ssh.disconnect()
+
+            if stats['folders_pulled'] == 0 and stats['folders_failed'] > 0:
+                return False, f"All folders failed to pull", stats
+
+            success_msg = f"Pull folders completed: {stats['folders_pulled']} folders pulled"
+            if stats['folders_failed'] > 0:
+                success_msg += f", {stats['folders_failed']} failed"
+
+            self.logger.info(success_msg)
+            return True, success_msg, stats
+
+        except Exception as e:
+            error_msg = f"Pull folders failed: {str(e)}"
+            self.logger.error(error_msg)
+            return False, error_msg, stats

@@ -3,6 +3,7 @@ Database push controller for uploading database to remote server
 """
 import os
 import tempfile
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Tuple, Callable, List
@@ -19,6 +20,39 @@ class DBPushController:
     def __init__(self, config_service: ConfigService):
         self.config_service = config_service
         self.logger = setup_logger('db_push')
+
+    def _save_database_backup(self, source_file: str, db_name: str, backup_type: str, local_root: str) -> str:
+        """
+        Save database backup to /db folder
+
+        Args:
+            source_file: Path to source SQL file
+            db_name: Database name
+            backup_type: 'local' or 'remote'
+            local_root: Local site root path
+
+        Returns:
+            Path to saved backup file
+        """
+        try:
+            # Create /db folder if it doesn't exist
+            db_folder = os.path.join(local_root, 'db')
+            os.makedirs(db_folder, exist_ok=True)
+
+            # Generate filename: [dbname]-[date]-[time]-[local|remote].sql
+            timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+            backup_filename = f"{db_name}-{timestamp}-{backup_type}.sql"
+            backup_path = os.path.join(db_folder, backup_filename)
+
+            # Copy file to backup location
+            shutil.copy2(source_file, backup_path)
+
+            self.logger.info(f"Saved database backup: {backup_path}")
+            return backup_path
+
+        except Exception as e:
+            self.logger.error(f"Failed to save database backup: {e}")
+            return ""
 
     def push(self, site_id: str, exclude_tables: List[str] = None,
              progress_callback: Callable = None) -> Tuple[bool, str, dict]:
@@ -124,6 +158,15 @@ class DBPushController:
             if success:
                 stats['tables_exported'] = len(tables) - len(all_exclude_tables)
 
+            # Save local database backup if enabled
+            if site.database_config.save_database_backups:
+                self._save_database_backup(
+                    temp_local_file,
+                    site.database_config.local_db_name,
+                    'local',
+                    site.local_path
+                )
+
             # Step 6: Replace table prefixes if different
             current_step += 1
             if progress_callback:
@@ -181,6 +224,32 @@ class DBPushController:
 
                 if success:
                     stats['backup_created'] = backup_file
+
+                    # Download and save remote backup if enabled
+                    if site.database_config.save_database_backups:
+                        try:
+                            remote_backup_path = os.path.join(site.remote_path, backup_file)
+                            temp_remote_backup = os.path.join(tempfile.gettempdir(), f"remote-backup-{timestamp}.sql")
+
+                            sftp = SFTPService(site.remote_host, site.remote_port, site.remote_username, ssh_password)
+                            sftp.connect()
+                            sftp.download_file(remote_backup_path, temp_remote_backup)
+                            sftp.disconnect()
+
+                            self._save_database_backup(
+                                temp_remote_backup,
+                                site.database_config.remote_db_name,
+                                'remote',
+                                site.local_path
+                            )
+
+                            # Cleanup temp file
+                            try:
+                                os.remove(temp_remote_backup)
+                            except:
+                                pass
+                        except Exception as e:
+                            self.logger.warning(f"Failed to download remote backup: {e}")
                 else:
                     self.logger.warning(f"Failed to create remote backup: {msg}")
 

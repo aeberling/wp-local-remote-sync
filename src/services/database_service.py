@@ -32,6 +32,50 @@ class DatabaseService:
 
         self.db_config = site_config.database_config
 
+    def _get_local_mysql_path(self) -> Optional[str]:
+        """
+        Detect and return Local by Flywheel MySQL path if available
+
+        Returns:
+            MySQL bin path or None if not using Local
+        """
+        try:
+            import platform
+            if platform.system() == 'Darwin':  # macOS
+                local_services_path = os.path.expanduser("~/Library/Application Support/Local/lightning-services")
+
+                if os.path.exists(local_services_path):
+                    # Find MySQL directories
+                    mysql_dirs = [d for d in os.listdir(local_services_path) if d.startswith('mysql-')]
+
+                    if mysql_dirs:
+                        # Sort and get the latest version
+                        mysql_dirs.sort(reverse=True)
+                        latest_mysql = mysql_dirs[0]
+
+                        # Construct path to MySQL bin
+                        mysql_bin_path = os.path.join(
+                            local_services_path,
+                            latest_mysql,
+                            'bin/darwin-arm64/bin'
+                        )
+
+                        # Also check intel path
+                        if not os.path.exists(mysql_bin_path):
+                            mysql_bin_path = os.path.join(
+                                local_services_path,
+                                latest_mysql,
+                                'bin/darwin/bin'
+                            )
+
+                        if os.path.exists(mysql_bin_path):
+                            self.logger.info(f"Using Local by Flywheel MySQL from: {mysql_bin_path}")
+                            return mysql_bin_path
+        except Exception as e:
+            self.logger.debug(f"Could not detect Local MySQL: {e}")
+
+        return None
+
     def _execute_local_command(self, command: str, timeout: int = 300) -> Tuple[bool, str, str]:
         """
         Execute a command locally
@@ -46,13 +90,23 @@ class DatabaseService:
         try:
             self.logger.info(f"Executing local command: {command}")
 
+            # Prepare environment with Local's MySQL if available
+            env = os.environ.copy()
+            mysql_path = self._get_local_mysql_path()
+
+            if mysql_path:
+                # Prepend Local's MySQL to PATH
+                current_path = env.get('PATH', '')
+                env['PATH'] = f"{mysql_path}:{current_path}"
+
             result = subprocess.run(
                 command,
                 shell=True,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                cwd=self.site_config.local_path
+                cwd=self.site_config.local_path,
+                env=env
             )
 
             success = result.returncode == 0
