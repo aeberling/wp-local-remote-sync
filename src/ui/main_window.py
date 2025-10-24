@@ -169,7 +169,7 @@ class MainWindow:
         self.setup_macos_focus_fix()
 
     def setup_macos_focus_fix(self):
-        """Setup macOS-specific focus handling"""
+        """Setup macOS-specific focus handling to fix first-click issue"""
         import platform
         import logging
         logger = logging.getLogger('wp-deploy')
@@ -177,13 +177,31 @@ class MainWindow:
         if platform.system() == 'Darwin':  # macOS
             # Try PyObjC approach for proper first-mouse handling
             try:
-                from AppKit import NSApp
+                from AppKit import NSApp, NSWindow
+                from Cocoa import NSObject
+                import objc
+                from ctypes import c_void_p
 
                 # Update and prepare window
                 self.root.update_idletasks()
                 self.root.update()
 
-                # Activate the application ignoring other apps - just once at startup
+                # Get the underlying NSWindow
+                # Tkinter on macOS uses the window ID which we can access
+                window_id = self.root.winfo_id()
+
+                # Get NSWindow from the window ID
+                nswindow = objc.objc_object(c_void_p=window_id)
+                if nswindow:
+                    # Enable accepting mouse moved events - this helps with focus
+                    nswindow.setAcceptsMouseMovedEvents_(True)
+
+                    # Make key and order front - ensures window is active and ready
+                    nswindow.makeKeyAndOrderFront_(None)
+
+                    logger.info("macOS NSWindow configuration applied for first-click fix")
+
+                # Activate the application ignoring other apps
                 NSApp.activateIgnoringOtherApps_(True)
 
                 # Bring to front
@@ -191,7 +209,21 @@ class MainWindow:
                 self.root.attributes('-topmost', True)
                 self.root.after(100, lambda: self.root.attributes('-topmost', False))
 
-                logger.info("macOS focus fix applied using PyObjC")
+                # Schedule periodic refocus to maintain window responsiveness
+                def maintain_focus():
+                    if self.root.winfo_exists():
+                        try:
+                            # Only reactivate if we're the frontmost app
+                            if NSApp.isActive():
+                                self.root.lift()
+                        except:
+                            pass
+                        # Check again in 500ms
+                        self.root.after(500, maintain_focus)
+
+                self.root.after(500, maintain_focus)
+
+                logger.info("macOS focus fix applied using PyObjC with first-click handling")
 
             except ImportError:
                 # PyObjC not available, use fallback approach
@@ -212,6 +244,11 @@ class MainWindow:
                     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except:
                     pass
+            except Exception as e:
+                logger.error(f"Error applying macOS focus fix: {e}")
+                # Fall back to basic approach
+                self.root.lift()
+                self.root.focus_force()
 
     def create_widgets(self):
         """Create all UI widgets"""
@@ -259,9 +296,13 @@ class MainWindow:
                               foreground="gray", font=("", 10))
         info_label.pack(pady=5)
 
-        self.push_site_label = ttk.Label(select_frame, text="No site selected",
-                                        font=("", 11, "bold"))
-        self.push_site_label.pack(pady=5)
+        # Create a prominent frame for the selected site
+        site_display_frame = ttk.Frame(select_frame, relief=tk.RIDGE, borderwidth=2)
+        site_display_frame.pack(pady=10, padx=5, fill=tk.X)
+
+        self.push_site_label = ttk.Label(site_display_frame, text="No site selected",
+                                        font=("", 16, "bold"), foreground="#0066cc")
+        self.push_site_label.pack(pady=12, padx=10)
 
         # Preview frame
         preview_frame = ttk.LabelFrame(self.push_frame, text="Files to Push", padding=10)
@@ -300,9 +341,13 @@ class MainWindow:
                               foreground="gray", font=("", 10))
         info_label.pack(pady=5)
 
-        self.pull_site_label = ttk.Label(select_frame, text="No site selected",
-                                        font=("", 11, "bold"))
-        self.pull_site_label.pack(pady=5)
+        # Create a prominent frame for the selected site
+        site_display_frame = ttk.Frame(select_frame, relief=tk.RIDGE, borderwidth=2)
+        site_display_frame.pack(pady=10, padx=5, fill=tk.X)
+
+        self.pull_site_label = ttk.Label(site_display_frame, text="No site selected",
+                                        font=("", 16, "bold"), foreground="#0066cc")
+        self.pull_site_label.pack(pady=12, padx=10)
 
         # Date range (initially hidden)
         self.date_frame = ttk.LabelFrame(self.pull_frame, text="Date Range", padding=10)
@@ -404,6 +449,9 @@ class MainWindow:
 
     def refresh_sites(self):
         """Refresh site list in all dropdowns and radio buttons"""
+        # Remember the currently selected site before refreshing
+        previously_selected_id = self.selected_site_var.get()
+
         sites = self.config_service.get_all_sites()
 
         # Clear existing radio buttons
@@ -455,9 +503,16 @@ class MainWindow:
 
             self.site_radiobuttons.append(rb)
 
-        # Select first site if available
+        # Restore previous selection if it still exists, otherwise select first site
         if sites:
-            self.selected_site_var.set(sites[0].id)
+            # Check if previously selected site still exists
+            site_ids = [site.id for site in sites]
+            if previously_selected_id and previously_selected_id in site_ids:
+                # Restore previous selection
+                self.selected_site_var.set(previously_selected_id)
+            else:
+                # Select first site if no valid previous selection
+                self.selected_site_var.set(sites[0].id)
             self.on_site_selected()
 
     def on_site_selected(self):
