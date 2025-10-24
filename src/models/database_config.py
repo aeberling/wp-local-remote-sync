@@ -3,6 +3,7 @@ Database configuration model
 """
 from dataclasses import dataclass, field
 from typing import List
+import re
 
 
 @dataclass
@@ -38,6 +39,43 @@ class DatabaseConfig:
     require_confirmation_on_push: bool = True
     save_database_backups: bool = True  # Save database dumps to /db folder
 
+    @staticmethod
+    def normalize_url(url: str) -> str:
+        """
+        Normalize a URL for database search-replace operations
+
+        - Strips leading/trailing whitespace
+        - Removes trailing slashes
+        - Validates URL format (must start with http:// or https://)
+        - Fixes common malformations like https:/ (missing slash)
+
+        Args:
+            url: URL to normalize
+
+        Returns:
+            Normalized URL, or empty string if invalid/empty
+        """
+        if not url:
+            return ""
+
+        url = url.strip()
+
+        # Remove trailing slashes
+        url = url.rstrip('/')
+
+        # Fix common malformation: https:/ -> https://
+        if url.startswith('https:/') and not url.startswith('https://'):
+            url = url.replace('https:/', 'https://', 1)
+        elif url.startswith('http:/') and not url.startswith('http://'):
+            url = url.replace('http:/', 'http://', 1)
+
+        # Validate URL format
+        if not re.match(r'^https?://.+', url):
+            # If URL doesn't start with protocol, it's invalid
+            return ""
+
+        return url
+
     def to_dict(self) -> dict:
         """Convert to dictionary for YAML serialization"""
         return {
@@ -62,6 +100,10 @@ class DatabaseConfig:
     @classmethod
     def from_dict(cls, data: dict) -> 'DatabaseConfig':
         """Create from dictionary"""
+        # Normalize URLs when loading from config
+        local_url = cls.normalize_url(data.get('local_url', ''))
+        remote_url = cls.normalize_url(data.get('remote_url', ''))
+
         return cls(
             local_db_name=data.get('local_db_name', ''),
             local_db_host=data.get('local_db_host', 'localhost'),
@@ -73,8 +115,8 @@ class DatabaseConfig:
             remote_db_port=data.get('remote_db_port', 3306),
             remote_db_user=data.get('remote_db_user', ''),
             remote_table_prefix=data.get('remote_table_prefix', 'wp_'),
-            local_url=data.get('local_url', ''),
-            remote_url=data.get('remote_url', ''),
+            local_url=local_url,
+            remote_url=remote_url,
             exclude_tables=data.get('exclude_tables', []),
             backup_before_import=data.get('backup_before_import', True),
             require_confirmation_on_push=data.get('require_confirmation_on_push', True),

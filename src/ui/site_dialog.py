@@ -626,7 +626,12 @@ class SiteDialog:
                 self.remote_table_prefix_entry.delete(0, tk.END)
                 self.remote_table_prefix_entry.insert(0, config['table_prefix'])
 
-            # Try to get site URL
+            # NOTE: We intentionally do NOT auto-update the Remote URL field here
+            # because the remote database might contain the wrong URL (e.g., local URL)
+            # if the local database was previously pushed to production.
+            # Users should manually set the Remote URL once and it will be preserved.
+
+            # Try to get site URL for informational purposes only
             site_url = config.get('site_url') or config.get('home_url')
             if not site_url:
                 site_url = WPConfigParser.get_site_url_from_wpcli(
@@ -635,9 +640,7 @@ class SiteDialog:
                     ssh_command_executor=ssh_service.execute_command
                 )
 
-            if site_url:
-                self.remote_url_entry.delete(0, tk.END)
-                self.remote_url_entry.insert(0, site_url)
+            # Do NOT update remote_url_entry - leave it as the user set it
 
             ssh_service.disconnect()
 
@@ -647,7 +650,9 @@ class SiteDialog:
                               f"User: {config['db_user']}\n"
                               f"Host: {config['db_host']}\n"
                               f"Table Prefix: {config.get('table_prefix', 'wp_')}\n"
-                              f"URL: {site_url or 'Not detected'}")
+                              f"URL in database: {site_url or 'Not detected'}\n\n"
+                              f"Note: Remote URL field was NOT updated.\n"
+                              f"Please set it manually if needed.")
 
         except Exception as e:
             messagebox.showerror("Error", f"Auto-detection failed:\n\n{str(e)}")
@@ -1105,6 +1110,28 @@ class SiteDialog:
                 exclude_text = self.exclude_tables_text.get('1.0', tk.END).strip()
                 exclude_tables = [t.strip() for t in exclude_text.split('\n') if t.strip()]
 
+                # Normalize URLs before saving
+                local_url = DatabaseConfig.normalize_url(self.local_url_entry.get())
+                remote_url = DatabaseConfig.normalize_url(self.remote_url_entry.get())
+
+                # Warn if URLs were modified during normalization
+                original_local = self.local_url_entry.get().strip()
+                original_remote = self.remote_url_entry.get().strip()
+
+                if original_local and local_url != original_local:
+                    messagebox.showwarning("URL Modified",
+                                          f"Local URL was normalized:\n\n"
+                                          f"From: {original_local}\n"
+                                          f"To: {local_url}")
+
+                if original_remote and remote_url != original_remote:
+                    messagebox.showwarning("URL Modified",
+                                          f"Remote URL was normalized:\n\n"
+                                          f"From: {original_remote}\n"
+                                          f"To: {remote_url}\n\n"
+                                          f"Trailing slashes have been removed and\n"
+                                          f"URL format has been validated.")
+
                 database_config = DatabaseConfig(
                     local_db_name=self.local_db_name_entry.get(),
                     local_db_host=self.local_db_host_entry.get(),
@@ -1116,8 +1143,8 @@ class SiteDialog:
                     remote_db_port=int(self.remote_db_port_entry.get()) if self.remote_db_port_entry.get() else 3306,
                     remote_db_user=self.remote_db_user_entry.get(),
                     remote_table_prefix=self.remote_table_prefix_entry.get() or "wp_",
-                    local_url=self.local_url_entry.get(),
-                    remote_url=self.remote_url_entry.get(),
+                    local_url=local_url,
+                    remote_url=remote_url,
                     exclude_tables=exclude_tables,
                     backup_before_import=self.backup_before_import_var.get(),
                     require_confirmation_on_push=self.require_confirmation_var.get()
