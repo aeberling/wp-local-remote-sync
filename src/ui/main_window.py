@@ -186,20 +186,22 @@ class MainWindow:
                 self.root.update_idletasks()
                 self.root.update()
 
-                # Get the underlying NSWindow
-                # Tkinter on macOS uses the window ID which we can access
-                window_id = self.root.winfo_id()
-
-                # Get NSWindow from the window ID
-                nswindow = objc.objc_object(c_void_p=window_id)
-                if nswindow:
-                    # Enable accepting mouse moved events - this helps with focus
-                    nswindow.setAcceptsMouseMovedEvents_(True)
-
-                    # Make key and order front - ensures window is active and ready
-                    nswindow.makeKeyAndOrderFront_(None)
-
-                    logger.info("macOS NSWindow configuration applied for first-click fix")
+                # Note: Direct NSWindow access is commented out due to compatibility issues
+                # with newer pyobjc versions. The focus fixes below should still work.
+                # # Get the underlying NSWindow
+                # # Tkinter on macOS uses the window ID which we can access
+                # window_id = self.root.winfo_id()
+                #
+                # # Get NSWindow from the window ID
+                # nswindow = objc.objc_object(c_void_p=window_id)
+                # if nswindow:
+                #     # Enable accepting mouse moved events - this helps with focus
+                #     nswindow.setAcceptsMouseMovedEvents_(True)
+                #
+                #     # Make key and order front - ensures window is active and ready
+                #     nswindow.makeKeyAndOrderFront_(None)
+                #
+                #     logger.info("macOS NSWindow configuration applied for first-click fix")
 
                 # Activate the application ignoring other apps
                 NSApp.activateIgnoringOtherApps_(True)
