@@ -29,6 +29,10 @@ class DatabaseDialog:
         y = (self.dialog.winfo_screenheight() // 2) - (self.dialog.winfo_height() // 2)
         self.dialog.geometry(f"+{x}+{y}")
 
+        # Make dialog modal and prevent main window from taking focus
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+
         # Better focus handling for macOS
         self.dialog.update_idletasks()
         self.dialog.lift()
@@ -40,11 +44,26 @@ class DatabaseDialog:
         self.dialog.update()
         self.dialog.focus_force()
 
-        # Set focus to first field
-        self.local_db_name_entry.focus_set()
+        # Set focus to first field after a slight delay to ensure window is ready
+        self.dialog.after(50, lambda: self.local_db_name_entry.focus_set())
+
+        # Keep dialog focused when it's mapped or focused
+        self.dialog.bind('<FocusIn>', self._on_focus_in)
+        self.dialog.bind('<Map>', self._on_map)
 
         # Bind Escape key to cancel
         self.dialog.bind('<Escape>', lambda e: self.cancel())
+
+    def _on_focus_in(self, event):
+        """Handle focus in event to keep dialog on top"""
+        if event.widget == self.dialog:
+            self.dialog.lift()
+
+    def _on_map(self, event):
+        """Handle map event to restore focus after keychain prompts"""
+        if event.widget == self.dialog:
+            self.dialog.lift()
+            self.dialog.focus_force()
 
     def create_widgets(self):
         """Create dialog widgets"""
@@ -410,6 +429,10 @@ class DatabaseDialog:
         self.config_service.update_site(self.site)
 
         self.result = True
+        try:
+            self.dialog.grab_release()
+        except:
+            pass
         self.dialog.destroy()
 
     def auto_detect_local_database(self):
@@ -565,6 +588,10 @@ class DatabaseDialog:
     def cancel(self):
         """Cancel and close dialog"""
         self.result = False
+        try:
+            self.dialog.grab_release()
+        except:
+            pass
         self.dialog.destroy()
 
     def show(self):

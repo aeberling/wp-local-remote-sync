@@ -342,8 +342,10 @@ class DatabaseService:
         try:
             stats = {'replacements': 0, 'tables': 0}
 
-            # Build command
+            # Build command with explicit table prefix to handle cases where
+            # wp-config.php prefix doesn't match the actual database tables
             command = f"wp search-replace {shlex.quote(search)} {shlex.quote(replace)}"
+            command += " --all-tables-with-prefix"
             command += " --report-changed-only --format=count"
 
             if dry_run:
@@ -388,9 +390,11 @@ class DatabaseService:
 
             stats = {'replacements': 0, 'tables': 0}
 
-            # Build command
+            # Build command with explicit table prefix to handle cases where
+            # wp-config.php prefix doesn't match the actual database tables
             command = f"cd {shlex.quote(self.site_config.remote_path)} && "
             command += f"wp search-replace {shlex.quote(search)} {shlex.quote(replace)}"
+            command += " --all-tables-with-prefix"
             command += " --report-changed-only --format=count"
 
             if dry_run:
@@ -535,10 +539,13 @@ class DatabaseService:
 
     def update_wp_options_prefix(self, old_prefix: str, new_prefix: str, remote: bool = False) -> Tuple[bool, str]:
         """
-        Update WordPress options table to reflect new table prefix
+        Update WordPress options and usermeta tables to reflect new table prefix
 
-        This updates option names in wp_options that reference the old prefix
-        (e.g., wp_user_roles -> wpmu_user_roles)
+        This updates:
+        1. Option names in wp_options that reference the old prefix
+           (e.g., wp_user_roles -> wpmu_user_roles)
+        2. User meta keys in wp_usermeta that reference the old prefix
+           (e.g., wp_capabilities -> wpmu_capabilities)
 
         Args:
             old_prefix: Old table prefix
@@ -552,35 +559,34 @@ class DatabaseService:
             if old_prefix == new_prefix:
                 return True, "Table prefixes are the same, no changes needed"
 
-            self.logger.info(f"Updating WordPress options for prefix change: {old_prefix} -> {new_prefix}")
+            self.logger.info(f"Updating WordPress options and usermeta for prefix change: {old_prefix} -> {new_prefix}")
 
-            # Update option names that contain the old prefix
-            # Common options: {prefix}user_roles, {prefix}dashboard_quick_press_last_post_id, etc.
             target = "remote" if remote else "local"
 
-            if remote:
-                command = f"cd {shlex.quote(self.site_config.remote_path)} && "
-            else:
-                command = ""
+            # Update option names in wp_options table
+            sql_query_options = f"UPDATE {new_prefix}options SET option_name = REPLACE(option_name, '{old_prefix}', '{new_prefix}') WHERE option_name LIKE '{old_prefix}%'"
 
-            # Use wp db query to update option names
-            sql_query = f"UPDATE {new_prefix}options SET option_name = REPLACE(option_name, '{old_prefix}', '{new_prefix}') WHERE option_name LIKE '{old_prefix}%'"
+            # Update meta keys in wp_usermeta table (CRITICAL for user capabilities!)
+            sql_query_usermeta = f"UPDATE {new_prefix}usermeta SET meta_key = REPLACE(meta_key, '{old_prefix}', '{new_prefix}') WHERE meta_key LIKE '{old_prefix}%'"
+
+            # Combine both queries
+            combined_query = f"{sql_query_options}; {sql_query_usermeta};"
 
             if remote:
-                command += f"wp db query {shlex.quote(sql_query)}"
+                command = f"cd {shlex.quote(self.site_config.remote_path)} && wp db query {shlex.quote(combined_query)}"
                 success, stdout, stderr = self.ssh_service.execute_command(command)
             else:
-                command = f"wp db query {shlex.quote(sql_query)}"
+                command = f"wp db query {shlex.quote(combined_query)}"
                 success, stdout, stderr = self._execute_local_command(command)
 
             if success:
-                msg = f"Updated WordPress options for {target} database"
+                msg = f"Updated WordPress options and usermeta for {target} database"
                 self.logger.info(msg)
                 return True, msg
             else:
-                return False, f"Failed to update WordPress options: {stderr}"
+                return False, f"Failed to update WordPress options/usermeta: {stderr}"
 
         except Exception as e:
-            error_msg = f"Error updating WordPress options: {e}"
+            error_msg = f"Error updating WordPress options/usermeta: {e}"
             self.logger.error(error_msg)
             return False, error_msg

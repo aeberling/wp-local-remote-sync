@@ -33,6 +33,10 @@ class SiteDialog:
         y = (self.dialog.winfo_screenheight() // 2) - (self.dialog.winfo_height() // 2)
         self.dialog.geometry(f"+{x}+{y}")
 
+        # Make dialog modal and prevent main window from taking focus
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+
         # Better focus handling for macOS
         self.dialog.update_idletasks()
         self.dialog.lift()
@@ -44,11 +48,26 @@ class SiteDialog:
         self.dialog.update()
         self.dialog.focus_force()
 
-        # Set focus to first field
-        self.name_entry.focus_set()
+        # Set focus to first field after a slight delay to ensure window is ready
+        self.dialog.after(50, lambda: self.name_entry.focus_set())
+
+        # Keep dialog focused when it's mapped or focused
+        self.dialog.bind('<FocusIn>', self._on_focus_in)
+        self.dialog.bind('<Map>', self._on_map)
 
         # Bind Escape key to cancel
         self.dialog.bind('<Escape>', lambda e: self.cancel())
+
+    def _on_focus_in(self, event):
+        """Handle focus in event to keep dialog on top"""
+        if event.widget == self.dialog:
+            self.dialog.lift()
+
+    def _on_map(self, event):
+        """Handle map event to restore focus after keychain prompts"""
+        if event.widget == self.dialog:
+            self.dialog.lift()
+            self.dialog.focus_force()
 
     def create_widgets(self):
         """Create dialog widgets with tabbed interface"""
@@ -935,7 +954,12 @@ class SiteDialog:
             self.local_path_entry.insert(0, directory)
             self.check_and_set_git_repo(directory)
 
+        # Restore focus to dialog window
+        self.dialog.update_idletasks()
         self.dialog.lift()
+        self.dialog.attributes('-topmost', True)
+        self.dialog.update()
+        self.dialog.attributes('-topmost', False)
         self.dialog.focus_force()
 
     def browse_git(self):
@@ -956,7 +980,12 @@ class SiteDialog:
             self.git_path_entry.delete(0, tk.END)
             self.git_path_entry.insert(0, directory)
 
+        # Restore focus to dialog window
+        self.dialog.update_idletasks()
         self.dialog.lift()
+        self.dialog.attributes('-topmost', True)
+        self.dialog.update()
+        self.dialog.attributes('-topmost', False)
         self.dialog.focus_force()
 
     def same_as_local(self):
@@ -997,10 +1026,14 @@ class SiteDialog:
         self.remote_path_entry.insert(0, self.site.remote_path)
         self.site_url_entry.insert(0, self.site.site_url if self.site.site_url else "")
 
-        # Load password from keyring
-        password = self.config_service.get_password(self.site.id)
-        if password:
-            self.password_entry.insert(0, password)
+        # Load password from keyring (with error handling to reduce prompts)
+        try:
+            password = self.config_service.get_password(self.site.id)
+            if password:
+                self.password_entry.insert(0, password)
+        except Exception:
+            # Silently fail if keychain access is denied
+            pass
 
         # Pull paths
         if self.site.pull_include_paths:
@@ -1031,9 +1064,13 @@ class SiteDialog:
             self.local_table_prefix_entry.delete(0, tk.END)
             self.local_table_prefix_entry.insert(0, db_config.local_table_prefix)
 
-            local_password = self.config_service.get_database_password(self.site.id, 'local')
-            if local_password:
-                self.local_db_password_entry.insert(0, local_password)
+            try:
+                local_password = self.config_service.get_database_password(self.site.id, 'local')
+                if local_password:
+                    self.local_db_password_entry.insert(0, local_password)
+            except Exception:
+                # Silently fail if keychain access is denied
+                pass
 
             # Remote database
             self.remote_db_name_entry.insert(0, db_config.remote_db_name)
@@ -1046,17 +1083,21 @@ class SiteDialog:
             self.remote_table_prefix_entry.delete(0, tk.END)
             self.remote_table_prefix_entry.insert(0, db_config.remote_table_prefix)
 
-            remote_password = self.config_service.get_database_password(self.site.id, 'remote')
-            if remote_password:
-                self.remote_db_password_entry.insert(0, remote_password)
+            try:
+                remote_password = self.config_service.get_database_password(self.site.id, 'remote')
+                if remote_password:
+                    self.remote_db_password_entry.insert(0, remote_password)
+            except Exception:
+                # Silently fail if keychain access is denied
+                pass
 
             # URLs
             self.local_url_entry.insert(0, db_config.local_url)
             self.remote_url_entry.insert(0, db_config.remote_url)
 
-            # Exclude tables
+            # Exclude tables - always clear and reload to handle empty lists correctly
+            self.exclude_tables_text.delete('1.0', tk.END)
             if db_config.exclude_tables:
-                self.exclude_tables_text.delete('1.0', tk.END)
                 self.exclude_tables_text.insert('1.0', '\n'.join(db_config.exclude_tables))
 
             # Options
@@ -1147,7 +1188,8 @@ class SiteDialog:
                     remote_url=remote_url,
                     exclude_tables=exclude_tables,
                     backup_before_import=self.backup_before_import_var.get(),
-                    require_confirmation_on_push=self.require_confirmation_var.get()
+                    require_confirmation_on_push=self.require_confirmation_var.get(),
+                    save_database_backups=self.save_database_backups_var.get()
                 )
 
                 # Save database passwords to keyring
@@ -1194,6 +1236,10 @@ class SiteDialog:
                 self.config_service.add_site(site_config, password)
 
             self.result = True
+            try:
+                self.dialog.grab_release()
+            except:
+                pass
             self.dialog.destroy()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save site: {e}")
@@ -1201,4 +1247,8 @@ class SiteDialog:
     def cancel(self):
         """Cancel and close dialog"""
         self.result = False
+        try:
+            self.dialog.grab_release()
+        except:
+            pass
         self.dialog.destroy()
