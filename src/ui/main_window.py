@@ -329,6 +329,10 @@ class MainWindow:
                                          style="Accent.TButton")
         self.db_push_button.pack(side=tk.LEFT, padx=5, ipady=12, ipadx=25)
 
+        self.push_entire_site_button = ttk.Button(button_frame, text="🚀 PUSH ENTIRE SITE", command=self.do_push_entire_site,
+                                                  style="Accent.TButton")
+        self.push_entire_site_button.pack(side=tk.LEFT, padx=5, ipady=12, ipadx=25)
+
         # Status
         self.push_status = ttk.Label(self.push_frame, text="Ready", relief=tk.SUNKEN)
         self.push_status.pack(fill=tk.X, padx=10, pady=5)
@@ -402,6 +406,10 @@ class MainWindow:
         self.db_pull_button = ttk.Button(button_frame, text="🗄️ PULL DATABASE", command=self.do_db_pull,
                                          style="Accent.TButton")
         self.db_pull_button.pack(side=tk.LEFT, padx=5, ipady=12, ipadx=25)
+
+        self.pull_entire_site_button = ttk.Button(button_frame, text="🚀 PULL ENTIRE SITE", command=self.do_pull_entire_site,
+                                                  style="Accent.TButton")
+        self.pull_entire_site_button.pack(side=tk.LEFT, padx=5, ipady=12, ipadx=25)
 
         # Status
         self.pull_status = ttk.Label(self.pull_frame, text="Ready", relief=tk.SUNKEN)
@@ -1277,6 +1285,268 @@ class MainWindow:
                 self.root.after(0, update_ui)
 
         Thread(target=test_thread, daemon=True).start()
+
+    def do_push_entire_site(self):
+        """Push entire site: database + all WordPress content folders"""
+        from ..utils.logger import setup_logger
+        logger = setup_logger('main_window')
+
+        # Get selected site
+        site_id = self.selected_site_var.get()
+        if not site_id:
+            messagebox.showwarning("No Selection", "Please select a site from the Configuration tab")
+            return
+
+        site = self.config_service.get_site(site_id)
+
+        # Check if database is configured
+        if not site.database_config:
+            messagebox.showwarning("Not Configured",
+                                 "Database not configured for this site.\n\n"
+                                 "Please configure database settings in the Configuration tab.")
+            return
+
+        # Show comprehensive warning
+        result = messagebox.askyesno("⚠️ WARNING: Push ENTIRE SITE to Production",
+                                    f"You are about to push the ENTIRE SITE to production:\n\n"
+                                    f"Site: {site.name}\n"
+                                    f"To: {site.remote_host}\n\n"
+                                    f"This will:\n"
+                                    f"  • OVERWRITE the production database\n"
+                                    f"  • PUSH all WordPress content folders:\n"
+                                    f"      - /wp-content/themes/\n"
+                                    f"      - /wp-content/plugins/\n"
+                                    f"      - /wp-content/uploads/\n"
+                                    f"  • IGNORE exclusions in settings\n"
+                                    f"  • Create backups (recommended)\n"
+                                    f"  • Potentially affect live users\n\n"
+                                    f"⚠️ This is a complete site deployment!\n\n"
+                                    f"Are you absolutely sure you want to continue?",
+                                    icon='warning')
+        if not result:
+            logger.info("Push entire site cancelled by user")
+            return
+
+        # Disable buttons
+        self.push_files_button.config(state=tk.DISABLED)
+        self.db_push_button.config(state=tk.DISABLED)
+        self.push_entire_site_button.config(state=tk.DISABLED)
+        self.push_status.config(text="Pushing entire site...")
+
+        # Show progress dialog
+        progress = ProgressDialog(self.root, "Push Entire Site", "Starting full site push...")
+
+        def push_entire_site_thread():
+            total_stats = {
+                'db_success': False,
+                'db_message': '',
+                'db_stats': {},
+                'folders_success': False,
+                'folders_message': '',
+                'folders_stats': {}
+            }
+
+            try:
+                # Step 1: Push database
+                progress.update_message("Step 1/2: Pushing database...")
+                logger.info("Pushing database...")
+                db_success, db_message, db_stats = self.db_push_controller.push(site_id)
+                total_stats['db_success'] = db_success
+                total_stats['db_message'] = db_message
+                total_stats['db_stats'] = db_stats
+
+                if not db_success:
+                    raise Exception(f"Database push failed: {db_message}")
+
+                logger.info(f"Database push completed: {db_message}")
+
+                # Step 2: Push content folders
+                progress.update_message("Step 2/2: Pushing WordPress content folders...")
+                logger.info("Pushing WordPress content folders...")
+
+                folders = ['wp-content/themes/', 'wp-content/plugins/', 'wp-content/uploads/']
+                folders_success, folders_message, folders_stats = self.push_controller.push_folders(
+                    site_id,
+                    folders
+                )
+                total_stats['folders_success'] = folders_success
+                total_stats['folders_message'] = folders_message
+                total_stats['folders_stats'] = folders_stats
+
+                if not folders_success:
+                    raise Exception(f"Folders push failed: {folders_message}")
+
+                logger.info(f"Folders push completed: {folders_message}")
+
+            except Exception as e:
+                logger.error(f"Push entire site failed: {e}")
+
+            def update_ui():
+                progress.close()
+                self.push_files_button.config(state=tk.NORMAL)
+                self.db_push_button.config(state=tk.NORMAL)
+                self.push_entire_site_button.config(state=tk.NORMAL)
+
+                if total_stats['db_success'] and total_stats['folders_success']:
+                    self.push_status.config(text="✓ Entire site pushed successfully")
+                    # Play system bell sound to get user's attention
+                    self.root.bell()
+                    messagebox.showinfo("✅ SUCCESS - ENTIRE SITE PUSHED!",
+                                      f"🚀 ENTIRE SITE PUSHED SUCCESSFULLY!\n\n"
+                                      f"════════════════════════════════\n\n"
+                                      f"DATABASE:\n"
+                                      f"  • Tables Exported: {total_stats['db_stats'].get('tables_exported', 0)}\n"
+                                      f"  • URLs Replaced: {total_stats['db_stats'].get('urls_replaced', 0)}\n"
+                                      f"  • Backup Created: {total_stats['db_stats'].get('backup_created', 'None')}\n\n"
+                                      f"CONTENT FOLDERS:\n"
+                                      f"  • Folders Pushed: {total_stats['folders_stats'].get('folders_pushed', 0)}\n"
+                                      f"  • Files Transferred: {total_stats['folders_stats'].get('files_pushed', 0)}\n\n"
+                                      f"════════════════════════════════\n\n"
+                                      f"✅ Your entire site is now LIVE on production!\n"
+                                      f"🌐 All content has been deployed successfully.")
+                else:
+                    self.push_status.config(text="✗ Push failed")
+                    error_msg = "Push entire site failed:\n\n"
+                    if not total_stats['db_success']:
+                        error_msg += f"Database: {total_stats['db_message']}\n"
+                    if not total_stats['folders_success']:
+                        error_msg += f"Folders: {total_stats['folders_message']}"
+                    messagebox.showerror("Error", error_msg)
+
+            self.root.after(0, update_ui)
+
+        Thread(target=push_entire_site_thread, daemon=True).start()
+
+    def do_pull_entire_site(self):
+        """Pull entire site: database + all WordPress content folders"""
+        from ..utils.logger import setup_logger
+        logger = setup_logger('main_window')
+
+        # Get selected site
+        site_id = self.selected_site_var.get()
+        if not site_id:
+            messagebox.showwarning("No Selection", "Please select a site from the Configuration tab")
+            return
+
+        site = self.config_service.get_site(site_id)
+
+        # Check if database is configured
+        if not site.database_config:
+            messagebox.showwarning("Not Configured",
+                                 "Database not configured for this site.\n\n"
+                                 "Please configure database settings in the Configuration tab.")
+            return
+
+        # Show comprehensive warning
+        result = messagebox.askyesno("⚠️ WARNING: Pull ENTIRE SITE from Production",
+                                    f"You are about to pull the ENTIRE SITE from production:\n\n"
+                                    f"Site: {site.name}\n"
+                                    f"From: {site.remote_host}\n\n"
+                                    f"This will:\n"
+                                    f"  • OVERWRITE your local database\n"
+                                    f"  • PULL all WordPress content folders:\n"
+                                    f"      - /wp-content/themes/\n"
+                                    f"      - /wp-content/plugins/\n"
+                                    f"      - /wp-content/uploads/\n"
+                                    f"  • IGNORE exclusions in settings\n"
+                                    f"  • Create backups (recommended)\n"
+                                    f"  • Replace all local content\n\n"
+                                    f"⚠️ This will overwrite your local development site!\n\n"
+                                    f"Are you absolutely sure you want to continue?",
+                                    icon='warning')
+        if not result:
+            logger.info("Pull entire site cancelled by user")
+            return
+
+        # Disable buttons
+        self.pull_files_button.config(state=tk.DISABLED)
+        self.db_pull_button.config(state=tk.DISABLED)
+        self.pull_entire_site_button.config(state=tk.DISABLED)
+        self.pull_status.config(text="Pulling entire site...")
+
+        # Show progress dialog
+        progress = ProgressDialog(self.root, "Pull Entire Site", "Starting full site pull...")
+
+        def pull_entire_site_thread():
+            total_stats = {
+                'db_success': False,
+                'db_message': '',
+                'db_stats': {},
+                'folders_success': False,
+                'folders_message': '',
+                'folders_stats': {}
+            }
+
+            try:
+                # Step 1: Pull database
+                progress.update_message("Step 1/2: Pulling database...")
+                logger.info("Pulling database...")
+                db_success, db_message, db_stats = self.db_pull_controller.pull(site_id)
+                total_stats['db_success'] = db_success
+                total_stats['db_message'] = db_message
+                total_stats['db_stats'] = db_stats
+
+                if not db_success:
+                    raise Exception(f"Database pull failed: {db_message}")
+
+                logger.info(f"Database pull completed: {db_message}")
+
+                # Step 2: Pull content folders
+                progress.update_message("Step 2/2: Pulling WordPress content folders...")
+                logger.info("Pulling WordPress content folders...")
+
+                folders = ['wp-content/themes/', 'wp-content/plugins/', 'wp-content/uploads/']
+                folders_success, folders_message, folders_stats = self.pull_controller.pull_folders(
+                    site_id,
+                    folders
+                )
+                total_stats['folders_success'] = folders_success
+                total_stats['folders_message'] = folders_message
+                total_stats['folders_stats'] = folders_stats
+
+                if not folders_success:
+                    raise Exception(f"Folders pull failed: {folders_message}")
+
+                logger.info(f"Folders pull completed: {folders_message}")
+
+            except Exception as e:
+                logger.error(f"Pull entire site failed: {e}")
+
+            def update_ui():
+                progress.close()
+                self.pull_files_button.config(state=tk.NORMAL)
+                self.db_pull_button.config(state=tk.NORMAL)
+                self.pull_entire_site_button.config(state=tk.NORMAL)
+
+                if total_stats['db_success'] and total_stats['folders_success']:
+                    self.pull_status.config(text="✓ Entire site pulled successfully")
+                    # Play system bell sound to get user's attention
+                    self.root.bell()
+                    messagebox.showinfo("✅ SUCCESS - ENTIRE SITE PULLED!",
+                                      f"🚀 ENTIRE SITE PULLED SUCCESSFULLY!\n\n"
+                                      f"════════════════════════════════\n\n"
+                                      f"DATABASE:\n"
+                                      f"  • Tables Imported: {total_stats['db_stats'].get('tables_exported', 0)}\n"
+                                      f"  • URLs Replaced: {total_stats['db_stats'].get('urls_replaced', 0)}\n"
+                                      f"  • Backup Created: {total_stats['db_stats'].get('backup_created', 'None')}\n\n"
+                                      f"CONTENT FOLDERS:\n"
+                                      f"  • Folders Pulled: {total_stats['folders_stats'].get('folders_pulled', 0)}\n"
+                                      f"  • Files Transferred: {total_stats['folders_stats'].get('files_pulled', 0)}\n\n"
+                                      f"════════════════════════════════\n\n"
+                                      f"✅ Your local site now matches production!\n"
+                                      f"🔄 All content has been synchronized successfully.")
+                else:
+                    self.pull_status.config(text="✗ Pull failed")
+                    error_msg = "Pull entire site failed:\n\n"
+                    if not total_stats['db_success']:
+                        error_msg += f"Database: {total_stats['db_message']}\n"
+                    if not total_stats['folders_success']:
+                        error_msg += f"Folders: {total_stats['folders_message']}"
+                    messagebox.showerror("Error", error_msg)
+
+            self.root.after(0, update_ui)
+
+        Thread(target=pull_entire_site_thread, daemon=True).start()
 
 
 def run_gui():
