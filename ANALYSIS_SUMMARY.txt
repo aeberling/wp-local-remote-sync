@@ -1,0 +1,383 @@
+================================================================================
+SSH/SFTP DEPLOYMENT IMPLEMENTATION - ANALYSIS SUMMARY
+================================================================================
+
+PROJECT: WordPress Deployment Tool
+TYPE: Python Tkinter GUI application with SSH/SFTP file synchronization
+ARCHITECTURE: MVC (Model-View-Controller) + Service-based
+
+================================================================================
+1. IMPLEMENTATION OVERVIEW
+================================================================================
+
+CORE COMPONENTS:
+
+1. SSH/SFTP Services (Paramiko-based)
+   - SSHService: Remote command execution via SSH
+   - SFTPService: File transfer via SFTP
+   - Both support password and SSH key authentication
+
+2. Controllers (Operation Orchestrators)
+   - PushController: Git-based incremental file upload to remote
+   - PullController: Date-filtered selective file download from remote
+   - DBPushController/DBPullController: Database synchronization
+
+3. Configuration Management
+   - ConfigService: Manages YAML config + OS Keyring for credentials
+   - SiteConfig: Site information (host, paths, credentials)
+   - DatabaseConfig: Database connection details
+   - SyncState: Operation history tracking
+
+4. UI (Tkinter + sv_ttk theme)
+   - MainWindow: Multi-tab interface for operations
+   - SiteDialog: 950x750px tabbed dialog for site configuration
+   - Database auto-detection from wp-config.php
+
+5. File Management
+   - Git-based change detection for push operations
+   - Pattern matching for file filtering (exclude_patterns)
+   - Date-based filtering for pull operations
+   - Recursive directory listing on remote server
+
+================================================================================
+2. KEY FEATURES
+================================================================================
+
+PUSH OPERATIONS (Local → Remote):
+   - Incremental: Only uploads files changed since last push
+   - Uses Git commit history to track changes
+   - Filters by exclude_patterns (wp-config, .env, .git, etc.)
+   - Full push available for initial deployment
+   - Progress callbacks for UI updates
+   - Returns stats: files_pushed, files_failed, bytes_transferred
+
+PULL OPERATIONS (Remote → Local):
+   - Selective: Only pulls from specified include_paths
+   - Date-filtered: Downloads only files modified in user-specified date range
+   - Filters by exclude_patterns
+   - Creates local directories as needed
+   - Progress callbacks for UI updates
+   - Returns stats: files_pulled, files_failed, bytes_transferred
+
+CONFIGURATION:
+   - Stored in ~/.wp-deploy/sites.yaml (YAML format)
+   - Supports multiple site configurations
+   - Site ID: 8-character UUID
+   - Each site tracks: paths, SSH credentials, exclude patterns, pull paths
+   - Operation history in ~/.wp-deploy/sync_state.json
+
+CREDENTIALS:
+   - SSH passwords: Stored in OS Keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service)
+   - Database passwords: Stored separately in OS Keyring
+   - NOT stored in YAML files
+   - Automatically retrieved on connection
+
+SECURITY:
+   - Default exclude patterns prevent sensitive files from being pushed
+   - Date-based pulling prevents accidental large downloads
+   - Optional confirmation dialogs for production deployments
+   - Database backups before import
+   - Safe error handling with clean disconnections
+
+================================================================================
+3. FILE TRANSFER LOGIC
+================================================================================
+
+PUSH FLOW:
+   1. Get site config by ID from YAML
+   2. Retrieve SSH password from OS Keyring
+   3. Get changed files from Git (or all files if first push)
+   4. Apply exclude_patterns filter
+   5. Connect to SFTP server (Paramiko)
+   6. For each file:
+      a. Create remote directories recursively
+      b. Upload file via sftp.put()
+      c. Update progress callback
+      d. Record stats
+   7. Disconnect from SFTP
+   8. Update last_pushed_commit in config
+   9. Record operation state (timestamp, files_count, bytes, status)
+
+PULL FLOW:
+   1. Get site config by ID from YAML
+   2. Retrieve SSH password from OS Keyring
+   3. Connect to SFTP server (Paramiko)
+   4. For each include_path (e.g., wp-content/uploads):
+      a. List files recursively from remote path
+      b. Filter by date range (start_date < mtime < end_date)
+   5. Collect all matching files
+   6. Apply exclude_patterns filter
+   7. For each file:
+      a. Create local directories
+      b. Download file via sftp.get()
+      c. Update progress callback
+      d. Record stats
+   8. Disconnect from SFTP
+   9. Record operation state (timestamp, files_count, bytes, status)
+
+FILE FILTERING:
+   - Uses fnmatch() for glob-style pattern matching
+   - Checks: full path, directory paths, filename only
+   - Default excludes: *.log, wp-config.php, .env, .git/, node_modules/
+   - Customizable per site via exclude_patterns
+
+================================================================================
+4. CONFIGURATION STORAGE
+================================================================================
+
+LOCATION: ~/.wp-deploy/
+
+FILES:
+
+1. sites.yaml
+   - Contains all site configurations in YAML format
+   - Fields per site:
+     * id (8-char UUID)
+     * name, local_path, git_repo_path
+     * remote_host, remote_port, remote_path, remote_username
+     * exclude_patterns (list of glob patterns)
+     * pull_include_paths (list of directories to pull)
+     * last_pushed_commit (Git hash from last successful push)
+     * database_config (if configured)
+     * Timestamps (created_at, updated_at)
+
+2. sync_state.json
+   - Operation history tracking
+   - Per site:
+     * last_push: timestamp, status, files_count, bytes, commit hash
+     * last_pull: timestamp, status, files_count, bytes, date range
+     * last_db_push: database operation state
+     * last_db_pull: database operation state
+
+3. logs/ directory
+   - sftp.log, ssh.log, git.log, push.log, pull.log, config.log
+   - Detailed operation logs
+
+CREDENTIALS (OS Keyring):
+   - SSH password: Service="wp-deploy", Account="site-{site_id}"
+   - Local DB password: Service="wp-deploy-db", Account="{site_id}_local"
+   - Remote DB password: Service="wp-deploy-db", Account="{site_id}_remote"
+
+================================================================================
+5. UI STRUCTURE
+================================================================================
+
+MAIN WINDOW (1100x700px):
+   - Tabbed interface (Notebook widget)
+   - Tabs: Sites, Database Sync, Logs, Settings
+   - Sun Valley theme (dark/light auto-detect)
+
+SITE CONFIGURATION DIALOG (950x750px):
+   - Tab 1: SSH/SFTP Configuration
+     * Basic info: Name, Local Path, Git Repo Path
+     * Remote Server: Host, Port, Username, Password
+     * Remote Path, Site URL
+     * Pull Include Paths (one per line, scrollable text)
+   
+   - Tab 2: Database Configuration
+     * Sub-tab 2a: Local Database
+       - Name, Host, Port, Username, Password, Table Prefix
+       - Auto-detect from wp-config.php button
+       - Local Site URL
+     
+     * Sub-tab 2b: Remote Database
+       - Same fields as local
+       - Auto-detect from remote wp-config.php (via SSH)
+       - Remote Site URL
+     
+     * Sub-tab 2c: Advanced Options
+       - Exclude Tables (list to skip during sync)
+       - Safety checkboxes: backup before import, require confirmation
+   
+   - Buttons:
+     * Test Local Connection (validates WP-CLI + DB access)
+     * Test Remote Connection (SSH → validates WP-CLI + DB access)
+     * Save Site, Cancel
+
+KEY FEATURES:
+   - Git status indicator (validates repo during config)
+   - Password auto-detection from wp-config.php (local and remote)
+   - Connection testing before save
+   - macOS focus management
+   - Escape key to close dialog
+   - Field validation
+
+================================================================================
+6. AUTHENTICATION
+================================================================================
+
+SUPPORTED METHODS:
+
+1. Password Authentication
+   - SSH password directly in SFTPService/SSHService
+   - Retrieved from OS Keyring on demand
+   - Supported in both services via Paramiko
+
+2. SSH Key Authentication
+   - Code supports key_path parameter
+   - Supports passphrase-protected keys
+   - NOT currently exposed in UI dialog (only password supported in UI)
+
+IMPLEMENTATION:
+   - Paramiko SSHClient.connect() with either password or key_filename
+   - AutoAddPolicy() for unknown host keys (auto-accept)
+   - Clean error handling with ConnectionError exceptions
+
+================================================================================
+7. PROGRESS TRACKING
+================================================================================
+
+PATTERN:
+   - Controllers accept optional progress_callback parameter
+   - Callback signature: callback(current, total, message)
+   - Called for each file during transfer
+   - UI runs operations in background threads
+
+THREADING:
+   - Operations run in separate threads to prevent UI freeze
+   - progress_callback updates UI from background thread
+   - Main thread processes updates without blocking
+   - Graceful shutdown on error
+
+================================================================================
+8. ERROR HANDLING
+================================================================================
+
+STRATEGY:
+   - All methods return (success: bool, message: str) or (success, data, message)
+   - Exceptions caught and logged
+   - Clean disconnections even on error
+   - Detailed error messages for troubleshooting
+
+LOGGING:
+   - Component-specific loggers (sftp, ssh, git, push, pull, config)
+   - INFO and ERROR levels
+   - Logs stored in ~/.wp-deploy/logs/
+   - Integration with Python logging module
+
+================================================================================
+9. DATA MODELS
+================================================================================
+
+SiteConfig (Dataclass):
+   - id: 8-char UUID (site identifier)
+   - name: Display name
+   - local_path: Local WordPress root
+   - git_repo_path: Git repository path
+   - remote_host, remote_port, remote_path, remote_username: SSH/SFTP details
+   - exclude_patterns: Glob patterns for files to skip
+   - pull_include_paths: Directories to pull from remote
+   - last_pushed_commit: Git hash of last successful push
+   - database_config: Optional DatabaseConfig
+   - Timestamps: created_at, updated_at
+
+DatabaseConfig (Dataclass):
+   - Local connection: name, host, port, user, table_prefix
+   - Remote connection: name, host, port, user, table_prefix
+   - URLs: local_url, remote_url (for database search-replace)
+   - Options: exclude_tables, backup_before_import, require_confirmation
+   - Passwords stored separately in OS Keyring
+
+OperationState (Dataclass):
+   - timestamp: ISO datetime of operation
+   - status: "pending", "success", "failed", or "partial"
+   - files_count: Number of files transferred
+   - bytes_transferred: Total bytes
+   - error_message: Error details if failed
+   - For push: commit_hash, commit_message
+   - For pull: date_range_start, date_range_end
+
+SyncState (Dataclass):
+   - site_id: Which site this state belongs to
+   - last_push: OperationState from last push
+   - last_pull: OperationState from last pull
+   - last_db_push: DatabaseOperationState from last DB push
+   - last_db_pull: DatabaseOperationState from last DB pull
+
+================================================================================
+10. DEPENDENCIES
+================================================================================
+
+EXTERNAL PACKAGES:
+   - paramiko: SSH/SFTP client library
+   - gitpython: Git repository interactions
+   - keyring: OS-specific credential storage
+   - pyyaml: YAML file handling
+   - tkinter: GUI framework (included with Python)
+
+BUILT-IN:
+   - threading: Background operation execution
+   - logging: Operation logging
+   - pathlib: Path handling
+   - datetime: Date filtering
+   - fnmatch: Glob pattern matching
+
+================================================================================
+11. DEPLOYMENT SCENARIOS
+================================================================================
+
+SCENARIO 1: First-Time Production Deployment
+   1. Create site config in UI
+   2. Click "Push All" to upload all tracked Git files
+   3. last_pushed_commit recorded
+   4. All exclude_patterns respected
+
+SCENARIO 2: Incremental Updates
+   1. Make local changes
+   2. Commit to Git
+   3. Click "Push"
+   4. Only changed files since last push are uploaded
+   5. last_pushed_commit updated
+
+SCENARIO 3: Sync Remote Changes to Local
+   1. Click "Pull"
+   2. Select date range (e.g., last 24 hours)
+   3. Select which paths to pull (e.g., uploads)
+   4. Only recently modified files from those paths downloaded
+   5. Operation recorded in sync_state
+
+SCENARIO 4: Database Synchronization
+   1. Pull: Export prod DB, apply search-replace (prod URL → local), import locally
+   2. Push: Export local DB, apply search-replace (local → prod), import to prod
+   3. Auto-backups available
+   4. Exclude user tables option
+
+================================================================================
+12. IMPORTANT NOTES
+================================================================================
+
+LIMITATIONS:
+   - SSH key authentication supported in code but not in UI dialog
+   - No native rsync support (manual SFTP file-by-file)
+   - Database sync requires WP-CLI on both servers
+   - No remote file deletion (one-way sync only)
+
+SECURITY FEATURES:
+   - Default exclude patterns for sensitive files
+   - Credentials never stored in config files
+   - OS-specific secure credential storage
+   - Date filtering prevents accidental large pulls
+   - Optional production push confirmation
+
+OPTIMIZATIONS:
+   - Incremental push via Git (not all files every time)
+   - Date-based pull filtering (not recursive full sync)
+   - File permission preservation on remote
+   - Progress callbacks for responsive UI
+   - Background threading to prevent UI freeze
+
+TESTING CAPABILITIES:
+   - Connection test (SSH/SFTP connectivity)
+   - WP-CLI detection on remote
+   - Database connection test (local and remote)
+   - wp-config.php auto-detection
+   - Dry-run methods to preview what would be transferred
+
+================================================================================
+ANALYSIS COMPLETED: 2024-10-20
+DOCUMENTATION FILES CREATED:
+   1. SSH_SFTP_DEPLOYMENT_ANALYSIS.md (comprehensive 10-section analysis)
+   2. ARCHITECTURE_DIAGRAMS.md (visual ASCII diagrams)
+   3. QUICK_REFERENCE.md (developer quick reference)
+   4. ANALYSIS_SUMMARY.txt (this file)
+================================================================================
