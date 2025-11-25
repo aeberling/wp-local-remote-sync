@@ -33,6 +33,9 @@ class DatabaseDialog:
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
+        # Setup click-through focus handling for macOS
+        self._setup_focus_handling()
+
         # Better focus handling for macOS
         self.dialog.update_idletasks()
         self.dialog.lift()
@@ -53,6 +56,41 @@ class DatabaseDialog:
 
         # Bind Escape key to cancel
         self.dialog.bind('<Escape>', lambda e: self.cancel())
+
+    def _setup_focus_handling(self):
+        """Setup click-through focus handling for macOS dialogs"""
+        import platform
+        if platform.system() != 'Darwin':
+            return
+
+        def on_click(event):
+            """Handle click to ensure focus on first click"""
+            try:
+                widget = event.widget
+                if widget and widget.winfo_exists():
+                    widget_class = widget.winfo_class()
+                    if widget_class in ('Entry', 'Text', 'TEntry', 'TCombobox', 'Spinbox', 'TSpinbox'):
+                        widget.focus_set()
+                    else:
+                        self.dialog.focus_force()
+            except:
+                pass
+
+        self.dialog.bind('<Button-1>', on_click, add='+')
+        self.dialog.bind('<Button-2>', on_click, add='+')
+        self.dialog.bind('<Button-3>', on_click, add='+')
+
+        try:
+            from AppKit import NSApp
+            def activate_on_click(event):
+                try:
+                    if not NSApp.isActive():
+                        NSApp.activateIgnoringOtherApps_(True)
+                except:
+                    pass
+            self.dialog.bind('<Button-1>', activate_on_click, add='+')
+        except ImportError:
+            pass
 
     def _on_focus_in(self, event):
         """Handle focus in event to keep dialog on top"""

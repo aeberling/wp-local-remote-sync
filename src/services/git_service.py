@@ -147,3 +147,72 @@ class GitService:
     def get_untracked_files(self) -> List[str]:
         """Get list of untracked files"""
         return self.repo.untracked_files
+
+    def get_recent_commits(self, count: int = 10) -> List[dict]:
+        """
+        Get the most recent commits from the repository
+
+        Args:
+            count: Number of commits to retrieve (default 10)
+
+        Returns:
+            List of dicts with commit info: {hash, short_hash, message, author, date}
+        """
+        try:
+            commits = []
+            for commit in self.repo.iter_commits(max_count=count):
+                commits.append({
+                    'hash': commit.hexsha,
+                    'short_hash': commit.hexsha[:7],
+                    'message': commit.message.strip().split('\n')[0],  # First line only
+                    'author': str(commit.author),
+                    'date': commit.committed_datetime.strftime('%Y-%m-%d %H:%M')
+                })
+            self.logger.info(f"Retrieved {len(commits)} recent commits")
+            return commits
+        except Exception as e:
+            self.logger.error(f"Error getting recent commits: {e}")
+            return []
+
+    def get_files_in_commits(self, commit_hashes: List[str]) -> List[str]:
+        """
+        Get all files that were changed in the specified commits
+
+        Args:
+            commit_hashes: List of commit hashes to get files from
+
+        Returns:
+            List of unique file paths that exist in the current tree
+        """
+        try:
+            all_files = set()
+
+            for commit_hash in commit_hashes:
+                commit = self.repo.commit(commit_hash)
+
+                # Get files changed in this commit by comparing to parent
+                if commit.parents:
+                    # Compare with first parent
+                    diff = commit.parents[0].diff(commit)
+                else:
+                    # First commit - all files are new
+                    for item in commit.tree.traverse():
+                        if item.type == 'blob':
+                            all_files.add(item.path)
+                    continue
+
+                for item in diff:
+                    # Include files that exist in the commit (not deleted)
+                    if item.b_path:
+                        all_files.add(item.b_path)
+
+            # Filter to only include files that exist in current tree
+            current_files = set(self.get_all_tracked_files())
+            existing_files = [f for f in all_files if f in current_files]
+
+            self.logger.info(f"Found {len(existing_files)} unique files from {len(commit_hashes)} commits")
+            return sorted(existing_files)
+
+        except Exception as e:
+            self.logger.error(f"Error getting files from commits: {e}")
+            raise

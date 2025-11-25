@@ -17,6 +17,42 @@ from ..models.site_config import SiteConfig
 
 # Import Sun Valley theme
 from .. import sv_ttk
+import platform
+
+
+def setup_dialog_focus(dialog):
+    """Setup click-through focus handling for macOS dialogs"""
+    if platform.system() != 'Darwin':
+        return
+
+    def on_click(event):
+        """Handle click to ensure focus on first click"""
+        try:
+            widget = event.widget
+            if widget and widget.winfo_exists():
+                widget_class = widget.winfo_class()
+                if widget_class in ('Entry', 'Text', 'TEntry', 'TCombobox', 'Spinbox', 'TSpinbox'):
+                    widget.focus_set()
+                else:
+                    dialog.focus_force()
+        except:
+            pass
+
+    dialog.bind('<Button-1>', on_click, add='+')
+    dialog.bind('<Button-2>', on_click, add='+')
+    dialog.bind('<Button-3>', on_click, add='+')
+
+    try:
+        from AppKit import NSApp
+        def activate_on_click(event):
+            try:
+                if not NSApp.isActive():
+                    NSApp.activateIgnoringOtherApps_(True)
+            except:
+                pass
+        dialog.bind('<Button-1>', activate_on_click, add='+')
+    except ImportError:
+        pass
 
 
 class ProgressDialog:
@@ -32,6 +68,9 @@ class ProgressDialog:
         x = (self.dialog.winfo_screenwidth() // 2) - (self.dialog.winfo_width() // 2)
         y = (self.dialog.winfo_screenheight() // 2) - (self.dialog.winfo_height() // 2)
         self.dialog.geometry(f"+{x}+{y}")
+
+        # Setup focus handling for macOS
+        setup_dialog_focus(self.dialog)
 
         # Create widgets
         frame = ttk.Frame(self.dialog, padding=20)
@@ -80,6 +119,9 @@ class FolderInputDialog:
         y = (self.dialog.winfo_screenheight() // 2) - (self.dialog.winfo_height() // 2)
         self.dialog.geometry(f"+{x}+{y}")
 
+        # Setup focus handling for macOS
+        setup_dialog_focus(self.dialog)
+
         # Create widgets
         frame = ttk.Frame(self.dialog, padding=20)
         frame.pack(fill=tk.BOTH, expand=True)
@@ -109,10 +151,167 @@ class FolderInputDialog:
         self.dialog.attributes('-topmost', True)
         self.dialog.update()
         self.dialog.attributes('-topmost', False)
+        self.dialog.focus_force()
+        self.dialog.after(50, lambda: self.text.focus_set())
 
     def on_ok(self):
         """Handle OK button"""
         self.result = self.text.get(1.0, tk.END).strip()
+        self.dialog.destroy()
+
+    def on_cancel(self):
+        """Handle Cancel button"""
+        self.result = None
+        self.dialog.destroy()
+
+    def show(self):
+        """Show dialog and return result"""
+        self.dialog.wait_window()
+        return self.result
+
+
+class GitCommitDialog:
+    """Dialog for selecting git commits to push"""
+
+    def __init__(self, parent, commits: list):
+        """
+        Initialize the dialog
+
+        Args:
+            parent: Parent window
+            commits: List of commit dicts with hash, short_hash, message, author, date
+        """
+        self.result = None
+        self.commits = commits
+        self.checkboxes = []
+        self.check_vars = []
+
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Select Git Commits to Push")
+        self.dialog.geometry("700x500")
+
+        # Make modal
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+
+        # Center dialog
+        self.dialog.update_idletasks()
+        x = (self.dialog.winfo_screenwidth() // 2) - (self.dialog.winfo_width() // 2)
+        y = (self.dialog.winfo_screenheight() // 2) - (self.dialog.winfo_height() // 2)
+        self.dialog.geometry(f"+{x}+{y}")
+
+        # Setup focus handling for macOS
+        setup_dialog_focus(self.dialog)
+
+        # Create widgets
+        frame = ttk.Frame(self.dialog, padding=20)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        # Header
+        header_label = ttk.Label(frame,
+                                 text="Select commits to push (files from selected commits will be pushed):",
+                                 wraplength=650)
+        header_label.pack(pady=(0, 10))
+
+        # Select all / none buttons
+        select_frame = ttk.Frame(frame)
+        select_frame.pack(fill=tk.X, pady=(0, 5))
+
+        select_all_btn = ttk.Button(select_frame, text="Select All", command=self.select_all)
+        select_all_btn.pack(side=tk.LEFT, padx=2)
+
+        select_none_btn = ttk.Button(select_frame, text="Select None", command=self.select_none)
+        select_none_btn.pack(side=tk.LEFT, padx=2)
+
+        # Scrollable frame for commits
+        canvas_frame = ttk.Frame(frame)
+        canvas_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+
+        canvas = tk.Canvas(canvas_frame, bg='#1e1e1e', highlightthickness=0)
+        scrollbar = ttk.Scrollbar(canvas_frame, orient=tk.VERTICAL, command=canvas.yview)
+        self.commits_frame = ttk.Frame(canvas)
+
+        self.commits_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=self.commits_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Add commits as checkboxes
+        for i, commit in enumerate(commits):
+            var = tk.BooleanVar(value=False)
+            self.check_vars.append(var)
+
+            commit_frame = ttk.Frame(self.commits_frame)
+            commit_frame.pack(fill=tk.X, padx=5, pady=2)
+
+            cb = ttk.Checkbutton(
+                commit_frame,
+                variable=var,
+                command=self.update_file_count
+            )
+            cb.pack(side=tk.LEFT)
+
+            # Commit info label
+            commit_text = f"{commit['short_hash']} - {commit['date']} - {commit['message'][:60]}"
+            if len(commit['message']) > 60:
+                commit_text += "..."
+
+            label = ttk.Label(commit_frame, text=commit_text, wraplength=600)
+            label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            self.checkboxes.append(cb)
+
+        # File count label
+        self.file_count_label = ttk.Label(frame, text="Selected: 0 commits", foreground="gray")
+        self.file_count_label.pack(pady=5)
+
+        # Buttons
+        button_frame = ttk.Frame(frame)
+        button_frame.pack(pady=10)
+
+        ok_btn = ttk.Button(button_frame, text="Push Selected", command=self.on_ok, style="Accent.TButton")
+        ok_btn.pack(side=tk.LEFT, padx=5, ipadx=20, ipady=5)
+
+        cancel_btn = ttk.Button(button_frame, text="Cancel", command=self.on_cancel)
+        cancel_btn.pack(side=tk.LEFT, padx=5, ipadx=20, ipady=5)
+
+        # Make it appear on top
+        self.dialog.lift()
+        self.dialog.attributes('-topmost', True)
+        self.dialog.update()
+        self.dialog.attributes('-topmost', False)
+        self.dialog.focus_force()
+
+    def select_all(self):
+        """Select all commits"""
+        for var in self.check_vars:
+            var.set(True)
+        self.update_file_count()
+
+    def select_none(self):
+        """Deselect all commits"""
+        for var in self.check_vars:
+            var.set(False)
+        self.update_file_count()
+
+    def update_file_count(self):
+        """Update the file count label"""
+        selected_count = sum(1 for var in self.check_vars if var.get())
+        self.file_count_label.config(text=f"Selected: {selected_count} commits")
+
+    def on_ok(self):
+        """Handle OK button - return selected commit hashes"""
+        selected_hashes = []
+        for i, var in enumerate(self.check_vars):
+            if var.get():
+                selected_hashes.append(self.commits[i]['hash'])
+        self.result = selected_hashes
         self.dialog.destroy()
 
     def on_cancel(self):
@@ -175,33 +374,33 @@ class MainWindow:
         logger = logging.getLogger('wp-deploy')
 
         if platform.system() == 'Darwin':  # macOS
-            # Try PyObjC approach for proper first-mouse handling
+            # Bind click events on the root window to force focus
+            # This makes the window behave like a normal window that accepts first click
+            def on_click(event):
+                """Handle any click in the window to ensure focus"""
+                try:
+                    widget = event.widget
+                    if widget and widget.winfo_exists():
+                        widget_class = widget.winfo_class()
+                        if widget_class in ('Entry', 'Text', 'TEntry', 'TCombobox', 'Spinbox', 'TSpinbox'):
+                            widget.focus_set()
+                        else:
+                            self.root.focus_force()
+                except:
+                    pass
+
+            # Bind to all mouse button clicks
+            self.root.bind_all('<Button-1>', on_click, add='+')
+            self.root.bind_all('<Button-2>', on_click, add='+')
+            self.root.bind_all('<Button-3>', on_click, add='+')
+
+            # Try PyObjC approach for proper app activation
             try:
-                from AppKit import NSApp, NSWindow
-                from Cocoa import NSObject
-                import objc
-                from ctypes import c_void_p
+                from AppKit import NSApp, NSApplication
 
                 # Update and prepare window
                 self.root.update_idletasks()
                 self.root.update()
-
-                # Note: Direct NSWindow access is commented out due to compatibility issues
-                # with newer pyobjc versions. The focus fixes below should still work.
-                # # Get the underlying NSWindow
-                # # Tkinter on macOS uses the window ID which we can access
-                # window_id = self.root.winfo_id()
-                #
-                # # Get NSWindow from the window ID
-                # nswindow = objc.objc_object(c_void_p=window_id)
-                # if nswindow:
-                #     # Enable accepting mouse moved events - this helps with focus
-                #     nswindow.setAcceptsMouseMovedEvents_(True)
-                #
-                #     # Make key and order front - ensures window is active and ready
-                #     nswindow.makeKeyAndOrderFront_(None)
-                #
-                #     logger.info("macOS NSWindow configuration applied for first-click fix")
 
                 # Activate the application ignoring other apps
                 NSApp.activateIgnoringOtherApps_(True)
@@ -211,21 +410,28 @@ class MainWindow:
                 self.root.attributes('-topmost', True)
                 self.root.after(100, lambda: self.root.attributes('-topmost', False))
 
-                # Schedule periodic refocus to maintain window responsiveness
-                def maintain_focus():
-                    if self.root.winfo_exists():
-                        try:
-                            # Only reactivate if we're the frontmost app
-                            if NSApp.isActive():
-                                self.root.lift()
-                        except:
-                            pass
-                        # Check again in 500ms
-                        self.root.after(500, maintain_focus)
+                # Handle window activation on any click
+                def activate_on_click(event):
+                    """Activate the app when window is clicked"""
+                    try:
+                        if not NSApp.isActive():
+                            NSApp.activateIgnoringOtherApps_(True)
+                    except:
+                        pass
 
-                self.root.after(500, maintain_focus)
+                self.root.bind('<Button-1>', activate_on_click, add='+')
 
-                logger.info("macOS focus fix applied using PyObjC with first-click handling")
+                # Use FocusIn event to ensure proper activation
+                def on_focus_in(event):
+                    """Ensure app is active when window gets focus"""
+                    try:
+                        NSApp.activateIgnoringOtherApps_(True)
+                    except:
+                        pass
+
+                self.root.bind('<FocusIn>', on_focus_in, add='+')
+
+                logger.info("macOS focus fix applied using PyObjC with click-through handling")
 
             except ImportError:
                 # PyObjC not available, use fallback approach
@@ -691,6 +897,8 @@ class MainWindow:
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="▲ Push Updated Git Files", command=self.do_push)
         menu.add_command(label="▲ Push All Files", command=self.do_push_all)
+        menu.add_command(label="📋 Push Files from Git Commits...", command=self.do_push_from_git)
+        menu.add_separator()
         menu.add_command(label="📦 Push Folder(s)", command=self.do_push_folders)
 
         # Get button position to display menu near it
@@ -811,6 +1019,115 @@ class MainWindow:
             self.root.after(0, update_ui)
 
         Thread(target=push_all_thread, daemon=True).start()
+
+    def do_push_from_git(self):
+        """Push files from selected git commits"""
+        import logging
+        logger = logging.getLogger('wp-deploy')
+
+        logger.info("=== PUSH FROM GIT COMMITS OPERATION STARTED ===")
+
+        site_id = self.selected_site_var.get()
+        if not site_id:
+            logger.warning("No site selected for push from git operation")
+            messagebox.showwarning("Warning", "Please select a site from the Configuration tab")
+            return
+
+        site = self.config_service.get_site(site_id)
+        if not site:
+            messagebox.showerror("Error", "Selected site not found")
+            return
+
+        if not site.git_repo_path:
+            messagebox.showerror("Error", "No git repository configured for this site.\n\nPlease configure a git repository in the site settings.")
+            return
+
+        logger.info(f"Selected site: {site.name} ({site_id})")
+        logger.info(f"Git repo: {site.git_repo_path}")
+
+        # Get recent commits
+        try:
+            from ..services.git_service import GitService
+            git_service = GitService(site.git_repo_path)
+            commits = git_service.get_recent_commits(10)
+
+            if not commits:
+                messagebox.showinfo("No Commits", "No commits found in the repository.")
+                return
+
+        except Exception as e:
+            logger.error(f"Failed to get git commits: {e}")
+            messagebox.showerror("Error", f"Failed to get git commits:\n\n{str(e)}")
+            return
+
+        # Show commit selection dialog
+        dialog = GitCommitDialog(self.root, commits)
+        selected_hashes = dialog.show()
+
+        if not selected_hashes:
+            logger.info("Push from git cancelled by user (no commits selected)")
+            return
+
+        logger.info(f"Selected {len(selected_hashes)} commits to push")
+
+        # Get files that will be pushed for confirmation
+        try:
+            files_to_push = git_service.get_files_in_commits(selected_hashes)
+            from ..utils.patterns import filter_files
+            files_to_push = filter_files(files_to_push, site.exclude_patterns)
+        except Exception as e:
+            logger.error(f"Failed to get files from commits: {e}")
+            messagebox.showerror("Error", f"Failed to get files from commits:\n\n{str(e)}")
+            return
+
+        if not files_to_push:
+            messagebox.showinfo("No Files", "No files to push from selected commits (after exclusion filters).")
+            return
+
+        # Confirm operation
+        file_preview = '\n'.join(files_to_push[:10])
+        if len(files_to_push) > 10:
+            file_preview += f"\n... and {len(files_to_push) - 10} more files"
+
+        if not messagebox.askyesno("Confirm Push",
+                                   f"Push {len(files_to_push)} files from {len(selected_hashes)} commits to {site.remote_host}?\n\n"
+                                   f"Files to push:\n{file_preview}"):
+            logger.info("Push from git cancelled by user")
+            return
+
+        # Visual feedback - button clicked
+        self.push_files_button.config(state=tk.DISABLED, text="⏳ PUSHING...")
+        self.push_status.config(text="Pushing files from commits...")
+        logger.info("Starting push from commits operation...")
+
+        def push_from_git_thread():
+            def progress_callback(current, total, message):
+                status_text = f"Pushing: {current}/{total} - {message}"
+                self.root.after(0, lambda: self.push_status.config(text=status_text))
+                logger.info(f"Progress: {current}/{total} - {message}")
+
+            success, message, stats = self.push_controller.push_from_commits(site_id, selected_hashes, progress_callback)
+
+            def update_ui():
+                self.push_files_button.config(state=tk.NORMAL, text="▲ PUSH FILES")
+                self.push_status.config(text=message)
+
+                if success:
+                    logger.info(f"Push from commits completed successfully: {stats['files_pushed']} files")
+                    result = f"Push from commits completed!\n\n"
+                    result += f"Commits processed: {stats.get('commits_pushed', len(selected_hashes))}\n"
+                    result += f"Files pushed: {stats['files_pushed']}\n"
+                    result += f"Bytes transferred: {stats['bytes_transferred']:,}\n"
+                    if stats['files_failed'] > 0:
+                        result += f"Files failed: {stats['files_failed']}\n"
+                    messagebox.showinfo("Success", result)
+                else:
+                    logger.error(f"Push from commits failed: {message}")
+                    messagebox.showerror("Error", message)
+
+            self.root.after(0, update_ui)
+
+        Thread(target=push_from_git_thread, daemon=True).start()
 
     def do_pull_by_date(self):
         """Execute pull by date operation - shows date UI first"""
