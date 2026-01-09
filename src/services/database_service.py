@@ -76,6 +76,131 @@ class DatabaseService:
 
         return None
 
+    def _get_mysql_socket_path(self) -> Optional[str]:
+        """
+        Detect MySQL socket path for Local by Flywheel or system MySQL
+
+        Returns:
+            Socket path or None if not found
+        """
+        try:
+            import platform
+            if platform.system() == 'Darwin':  # macOS
+                # Check Local by Flywheel socket locations
+                # Local stores sockets in site-specific directories
+                local_sites_path = os.path.expanduser("~/Library/Application Support/Local/run")
+                
+                if os.path.exists(local_sites_path):
+                    # Look for socket files in Local's run directory
+                    for item in os.listdir(local_sites_path):
+                        item_path = os.path.join(local_sites_path, item)
+                        if os.path.isdir(item_path):
+                            # Check for mysql.sock in subdirectories
+                            socket_path = os.path.join(item_path, "mysql.sock")
+                            if os.path.exists(socket_path):
+                                self.logger.info(f"Found Local MySQL socket at: {socket_path}")
+                                return socket_path
+                            
+                            # Also check for mysql.sock in the root of run directory
+                            root_socket = os.path.join(local_sites_path, "mysql.sock")
+                            if os.path.exists(root_socket):
+                                self.logger.info(f"Found Local MySQL socket at: {root_socket}")
+                                return root_socket
+                
+                # Check if we can determine socket from Local site path
+                # Local sites are typically in ~/Local Sites/
+                local_sites_dir = os.path.expanduser("~/Local Sites")
+                if os.path.exists(local_sites_dir) and self.site_config.local_path:
+                    # Try to extract site name from local_path
+                    # e.g., "/Users/name/Local Sites/mysite/app/public" -> "mysite"
+                    path_parts = self.site_config.local_path.split(os.sep)
+                    if "Local Sites" in path_parts:
+                        idx = path_parts.index("Local Sites")
+                        if idx + 1 < len(path_parts):
+                            site_name = path_parts[idx + 1]
+                            site_socket = os.path.join(
+                                local_sites_path, 
+                                site_name.replace(" ", "-").lower(),
+                                "mysql.sock"
+                            )
+                            if os.path.exists(site_socket):
+                                self.logger.info(f"Found Local MySQL socket for site at: {site_socket}")
+                                return site_socket
+                
+                # Check common system MySQL socket locations
+                common_sockets = [
+                    "/tmp/mysql.sock",
+                    "/var/mysql/mysql.sock",
+                    "/var/run/mysqld/mysqld.sock",
+                ]
+                
+                for socket_path in common_sockets:
+                    if os.path.exists(socket_path):
+                        self.logger.info(f"Found MySQL socket at: {socket_path}")
+                        return socket_path
+                        
+        except Exception as e:
+            self.logger.debug(f"Could not detect MySQL socket: {e}")
+
+        return None
+
+    def _get_mysql_connection_params(self) -> dict:
+        """
+        Get MySQL connection parameters from wp-config.php or database config
+        
+        Returns:
+            Dictionary with connection parameters for MySQL client tools
+        """
+        params = {}
+        
+        try:
+            # Try to read from wp-config.php
+            wp_config_path = os.path.join(self.site_config.local_path, 'wp-config.php')
+            if os.path.exists(wp_config_path):
+                from ..utils.wp_config_parser import WPConfigParser
+                config = WPConfigParser.parse_file(wp_config_path)
+                
+                db_host = config.get('db_host', 'localhost')
+                
+                # If host is localhost, check if we should use socket or TCP/IP
+                if db_host == 'localhost' or db_host.startswith('localhost:'):
+                    socket_path = self._get_mysql_socket_path()
+                    if socket_path:
+                        # Use socket connection - mysqldump will use this
+                        params['MYSQL_UNIX_PORT'] = socket_path
+                        self.logger.info(f"Using MySQL socket: {socket_path}")
+                    else:
+                        # No socket found - try to force TCP/IP
+                        # Note: WP-CLI reads from wp-config.php, so this might not work
+                        # But we can try setting environment variables that mysqldump might respect
+                        self.logger.warning(
+                            "MySQL socket not found. WP-CLI may fail to connect. "
+                            "Consider updating wp-config.php DB_HOST to '127.0.0.1' for TCP/IP connection."
+                        )
+                        # Try to use TCP/IP - but WP-CLI might still use socket
+                        # This is a best-effort attempt
+                        params['MYSQL_TCP_PORT'] = '3306'
+                elif ':' in db_host:
+                    # Host includes port (e.g., "127.0.0.1:3306" or "localhost:3306")
+                    host, port = db_host.split(':', 1)
+                    if host == 'localhost':
+                        # Even if specified as localhost:port, try socket first
+                        socket_path = self._get_mysql_socket_path()
+                        if socket_path:
+                            params['MYSQL_UNIX_PORT'] = socket_path
+                        else:
+                            params['MYSQL_TCP_PORT'] = port
+                    else:
+                        params['MYSQL_TCP_PORT'] = port
+                else:
+                    # Explicit host (not localhost)
+                    params['MYSQL_TCP_PORT'] = '3306'
+                    
+        except Exception as e:
+            self.logger.debug(f"Could not get MySQL connection params: {e}")
+        
+        return params
+
     def _execute_local_command(self, command: str, timeout: int = 300) -> Tuple[bool, str, str]:
         """
         Execute a command locally
@@ -98,6 +223,10 @@ class DatabaseService:
                 # Prepend Local's MySQL to PATH
                 current_path = env.get('PATH', '')
                 env['PATH'] = f"{mysql_path}:{current_path}"
+
+            # Set MySQL connection parameters to handle socket issues
+            mysql_params = self._get_mysql_connection_params()
+            env.update(mysql_params)
 
             result = subprocess.run(
                 command,
@@ -188,7 +317,23 @@ class DatabaseService:
                 self.logger.info(msg)
                 return True, msg
             else:
-                return False, f"Failed to export local database: {stderr}"
+                # Check if this is a socket connection error
+                error_msg = stderr
+                if "Can't connect to local MySQL server through socket" in stderr or "mysql.sock" in stderr:
+                    # Provide helpful guidance
+                    wp_config_path = os.path.join(self.site_config.local_path, 'wp-config.php')
+                    guidance = (
+                        f"\n\nMySQL socket connection failed. To fix this:\n"
+                        f"1. Open {wp_config_path}\n"
+                        f"2. Find the line: define('DB_HOST', 'localhost');\n"
+                        f"3. Change it to: define('DB_HOST', '127.0.0.1');\n"
+                        f"   (This forces TCP/IP connection instead of socket)\n"
+                        f"4. Save the file and try again.\n"
+                        f"\nAlternatively, ensure your MySQL server is running and the socket file exists."
+                    )
+                    error_msg = f"Failed to export local database: {stderr}{guidance}"
+                
+                return False, error_msg
 
         except Exception as e:
             error_msg = f"Error exporting local database: {e}"
