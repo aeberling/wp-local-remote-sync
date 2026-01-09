@@ -374,84 +374,114 @@ class MainWindow:
         logger = logging.getLogger('wp-deploy')
 
         if platform.system() == 'Darwin':  # macOS
-            # Bind click events on the root window to force focus
-            # This makes the window behave like a normal window that accepts first click
-            def on_click(event):
-                """Handle any click in the window to ensure focus"""
-                try:
-                    widget = event.widget
-                    if widget and widget.winfo_exists():
-                        widget_class = widget.winfo_class()
-                        if widget_class in ('Entry', 'Text', 'TEntry', 'TCombobox', 'Spinbox', 'TSpinbox'):
-                            widget.focus_set()
-                        else:
-                            self.root.focus_force()
-                except:
-                    pass
-
-            # Bind to all mouse button clicks
-            self.root.bind_all('<Button-1>', on_click, add='+')
-            self.root.bind_all('<Button-2>', on_click, add='+')
-            self.root.bind_all('<Button-3>', on_click, add='+')
-
             # Try PyObjC approach for proper app activation
             try:
-                from AppKit import NSApp, NSApplication
+                from AppKit import NSApp, NSApplication, NSApplicationActivationPolicyRegular
 
-                # Update and prepare window
-                self.root.update_idletasks()
-                self.root.update()
+                # CRITICAL: Set activation policy to Regular (foreground app)
+                # This is necessary for Python apps launched from terminal to behave
+                # like normal macOS apps that accept first-click interactions
+                NSApp.setActivationPolicy_(NSApplicationActivationPolicyRegular)
 
-                # Activate the application ignoring other apps
-                NSApp.activateIgnoringOtherApps_(True)
+                def activate_app():
+                    """Activate the application and bring window to front"""
+                    try:
+                        NSApp.activateIgnoringOtherApps_(True)
+                        self.root.lift()
+                    except:
+                        pass
 
-                # Bring to front
-                self.root.lift()
-                self.root.attributes('-topmost', True)
-                self.root.after(100, lambda: self.root.attributes('-topmost', False))
+                # Activate immediately after policy is set
+                activate_app()
 
-                # Handle window activation on any click
-                def activate_on_click(event):
-                    """Activate the app when window is clicked"""
+                # Also activate after window is fully mapped (slight delay ensures window is ready)
+                self.root.after(50, activate_app)
+                self.root.after(150, activate_app)
+
+                # Handle mouse entering window - activate app if not already active
+                def on_enter(event):
+                    """Activate app when mouse enters window"""
                     try:
                         if not NSApp.isActive():
                             NSApp.activateIgnoringOtherApps_(True)
                     except:
                         pass
 
-                self.root.bind('<Button-1>', activate_on_click, add='+')
+                self.root.bind('<Enter>', on_enter, add='+')
+
+                # Handle window activation on any click (backup)
+                def activate_on_click(event):
+                    """Activate the app when window is clicked"""
+                    try:
+                        if not NSApp.isActive():
+                            NSApp.activateIgnoringOtherApps_(True)
+                        # Also ensure the clicked widget gets focus
+                        widget = event.widget
+                        if widget and widget.winfo_exists():
+                            widget_class = widget.winfo_class()
+                            if widget_class in ('Entry', 'Text', 'TEntry', 'TCombobox', 'Spinbox', 'TSpinbox'):
+                                widget.focus_set()
+                    except:
+                        pass
+
+                self.root.bind_all('<Button-1>', activate_on_click, add='+')
 
                 # Use FocusIn event to ensure proper activation
                 def on_focus_in(event):
                     """Ensure app is active when window gets focus"""
                     try:
-                        NSApp.activateIgnoringOtherApps_(True)
+                        if not NSApp.isActive():
+                            NSApp.activateIgnoringOtherApps_(True)
                     except:
                         pass
 
                 self.root.bind('<FocusIn>', on_focus_in, add='+')
 
-                logger.info("macOS focus fix applied using PyObjC with click-through handling")
+                # Handle Visibility/Map events for when window becomes visible
+                def on_visibility(event):
+                    """Activate app when window becomes visible"""
+                    try:
+                        NSApp.activateIgnoringOtherApps_(True)
+                    except:
+                        pass
+
+                self.root.bind('<Visibility>', on_visibility, add='+')
+                self.root.bind('<Map>', on_visibility, add='+')
+
+                logger.info("macOS focus fix applied using PyObjC with NSApplicationActivationPolicyRegular")
 
             except ImportError:
                 # PyObjC not available, use fallback approach
                 logger.warning("PyObjC not available - install pyobjc-framework-Cocoa for better macOS support")
 
-                # Simpler approach without PyObjC
+                # Fallback: Use osascript to activate
+                def activate_with_osascript():
+                    try:
+                        import subprocess
+                        subprocess.run([
+                            'osascript', '-e',
+                            f'tell application "System Events" to set frontmost of first process whose unix id is {os.getpid()} to true'
+                        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+                    except:
+                        pass
+
+                # Activate now and after delay
+                self.root.after(50, activate_with_osascript)
+                self.root.after(200, activate_with_osascript)
+
+                # Bring window to front
                 self.root.lift()
                 self.root.attributes('-topmost', True)
                 self.root.after(100, lambda: self.root.attributes('-topmost', False))
                 self.root.focus_force()
 
-                # Use osascript to activate
-                try:
-                    import subprocess
-                    subprocess.Popen([
-                        'osascript', '-e',
-                        f'tell application "System Events" to set frontmost of first process whose unix id is {os.getpid()} to true'
-                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                except:
-                    pass
+                # Bind click to activate
+                def on_click(event):
+                    activate_with_osascript()
+                    self.root.focus_force()
+
+                self.root.bind('<Button-1>', on_click, add='+')
+
             except Exception as e:
                 logger.error(f"Error applying macOS focus fix: {e}")
                 # Fall back to basic approach
