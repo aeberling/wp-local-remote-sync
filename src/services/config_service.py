@@ -192,3 +192,123 @@ class ConfigService:
         states[sync_state.site_id] = sync_state.to_dict()
         self._save_sync_states(states)
         self.logger.info(f"Updated sync state for site: {sync_state.site_id}")
+
+    def export_site_to_json(self, site_id: str, file_path: str) -> bool:
+        """
+        Export a site configuration to a JSON file, including credentials.
+
+        Args:
+            site_id: The ID of the site to export
+            file_path: Path to save the JSON file
+
+        Returns:
+            True if export was successful, False otherwise
+        """
+        site = self.get_site(site_id)
+        if not site:
+            self.logger.error(f"Site not found: {site_id}")
+            return False
+
+        try:
+            # Build export data with site config
+            export_data = {
+                'version': '1.0',
+                'export_type': 'wp-deploy-site',
+                'site': site.to_dict(),
+                'credentials': {}
+            }
+
+            # Include SSH password if available
+            ssh_password = self.get_password(site_id)
+            if ssh_password:
+                export_data['credentials']['ssh_password'] = ssh_password
+
+            # Include database passwords if available
+            local_db_password = self.get_database_password(site_id, 'local')
+            if local_db_password:
+                export_data['credentials']['local_db_password'] = local_db_password
+
+            remote_db_password = self.get_database_password(site_id, 'remote')
+            if remote_db_password:
+                export_data['credentials']['remote_db_password'] = remote_db_password
+
+            # Write to file
+            with open(file_path, 'w') as f:
+                json.dump(export_data, f, indent=2)
+
+            self.logger.info(f"Exported site '{site.name}' to {file_path}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error exporting site: {e}")
+            return False
+
+    def import_site_from_json(self, file_path: str) -> Optional[SiteConfig]:
+        """
+        Import a site configuration from a JSON file, including credentials.
+
+        A new unique ID is generated for the imported site to avoid conflicts.
+
+        Args:
+            file_path: Path to the JSON file to import
+
+        Returns:
+            The imported SiteConfig if successful, None otherwise
+        """
+        import uuid
+        from datetime import datetime
+
+        try:
+            with open(file_path, 'r') as f:
+                import_data = json.load(f)
+
+            # Validate export format
+            if import_data.get('export_type') != 'wp-deploy-site':
+                self.logger.error("Invalid export file format")
+                return None
+
+            site_data = import_data.get('site')
+            if not site_data:
+                self.logger.error("No site data found in export file")
+                return None
+
+            credentials = import_data.get('credentials', {})
+
+            # Generate a new unique ID to avoid conflicts
+            new_id = uuid.uuid4().hex[:8]
+            site_data['id'] = new_id
+
+            # Reset timestamps
+            site_data['created_at'] = datetime.now().isoformat()
+            site_data['updated_at'] = datetime.now().isoformat()
+
+            # Reset sync tracking fields (these are specific to the original site)
+            site_data['last_pushed_commit'] = ''
+            site_data['last_db_pushed_at'] = ''
+            site_data['last_db_pulled_at'] = ''
+
+            # Create site config from data
+            site = SiteConfig.from_dict(site_data)
+
+            # Add the site (without password initially)
+            self.add_site(site)
+
+            # Store credentials in keyring
+            if credentials.get('ssh_password'):
+                self.set_password(new_id, credentials['ssh_password'])
+
+            if credentials.get('local_db_password'):
+                self.set_database_password(new_id, 'local', credentials['local_db_password'])
+
+            if credentials.get('remote_db_password'):
+                self.set_database_password(new_id, 'remote', credentials['remote_db_password'])
+
+            self.logger.info(f"Imported site '{site.name}' with ID {new_id}")
+            return site
+
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Invalid JSON in import file: {e}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Error importing site: {e}")
+            return None

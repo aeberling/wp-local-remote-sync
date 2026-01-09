@@ -2,7 +2,7 @@
 Main GUI window for WordPress deployment tool
 """
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, filedialog
 from datetime import datetime, timedelta
 from threading import Thread
 import sys
@@ -662,6 +662,15 @@ class MainWindow:
 
         test_btn = ttk.Button(button_frame, text="🔌 Test Connection", command=self.test_connection)
         test_btn.pack(side=tk.LEFT, padx=5, ipady=8, ipadx=12)
+
+        # Separator for visual grouping
+        ttk.Separator(button_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=10, fill=tk.Y)
+
+        export_btn = ttk.Button(button_frame, text="📤 Export Site", command=self.export_site)
+        export_btn.pack(side=tk.LEFT, padx=5, ipady=8, ipadx=12)
+
+        import_btn = ttk.Button(button_frame, text="📥 Import Site", command=self.import_site)
+        import_btn.pack(side=tk.LEFT, padx=5, ipady=8, ipadx=12)
 
     def refresh_sites(self):
         """Refresh site list in all dropdowns and radio buttons"""
@@ -1549,6 +1558,79 @@ class MainWindow:
             self.config_service.delete_site(site.id)
             self.refresh_sites()
             messagebox.showinfo("Success", "Site deleted")
+
+    def export_site(self):
+        """Export selected site configuration to JSON file"""
+        site_id = self.selected_site_var.get()
+        if not site_id:
+            messagebox.showwarning("Warning", "Please select a site to export")
+            return
+
+        site = self.config_service.get_site(site_id)
+        if not site:
+            messagebox.showerror("Error", "Selected site not found")
+            return
+
+        # Create a safe filename from the site name
+        safe_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in site.name)
+        default_filename = f"{safe_name}_export.json"
+
+        file_path = filedialog.asksaveasfilename(
+            title="Export Site Configuration",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            initialfile=default_filename
+        )
+
+        if not file_path:
+            return  # User cancelled
+
+        success = self.config_service.export_site_to_json(site_id, file_path)
+        if success:
+            messagebox.showinfo(
+                "Export Successful",
+                f"Site '{site.name}' has been exported to:\n{file_path}\n\n"
+                "Note: This file contains credentials. Store it securely."
+            )
+        else:
+            messagebox.showerror("Export Failed", "Failed to export site configuration. Check the log for details.")
+
+    def import_site(self):
+        """Import site configuration from JSON file"""
+        file_path = filedialog.askopenfilename(
+            title="Import Site Configuration",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+        )
+
+        if not file_path:
+            return  # User cancelled
+
+        # Confirm import
+        if not messagebox.askyesno(
+            "Confirm Import",
+            "This will create a new site from the exported configuration.\n\n"
+            "The imported site will have a new unique ID.\n\n"
+            "Continue with import?"
+        ):
+            return
+
+        site = self.config_service.import_site_from_json(file_path)
+        if site:
+            self.refresh_sites()
+            # Select the newly imported site
+            self.selected_site_var.set(site.id)
+            self.on_site_selected()
+            messagebox.showinfo(
+                "Import Successful",
+                f"Site '{site.name}' has been imported successfully.\n\n"
+                "You may want to review and update the site settings."
+            )
+        else:
+            messagebox.showerror(
+                "Import Failed",
+                "Failed to import site configuration.\n\n"
+                "Please ensure the file is a valid WP-Deploy export file."
+            )
 
     def test_connection(self):
         """Test SFTP connection for selected site"""
