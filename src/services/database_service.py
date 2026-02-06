@@ -34,14 +34,21 @@ class DatabaseService:
 
     def _get_local_mysql_path(self) -> Optional[str]:
         """
-        Detect and return Local by Flywheel MySQL path if available
+        Detect and return MySQL bin path from Laravel Herd, Local by Flywheel, or Homebrew
 
         Returns:
-            MySQL bin path or None if not using Local
+            MySQL bin path or None if not found
         """
         try:
             import platform
             if platform.system() == 'Darwin':  # macOS
+                # Check Laravel Herd
+                herd_bin_path = os.path.expanduser("~/Library/Application Support/Herd/bin")
+                if os.path.exists(os.path.join(herd_bin_path, 'mysql')):
+                    self.logger.info(f"Using Laravel Herd MySQL from: {herd_bin_path}")
+                    return herd_bin_path
+
+                # Check Local by Flywheel
                 local_services_path = os.path.expanduser("~/Library/Application Support/Local/lightning-services")
 
                 if os.path.exists(local_services_path):
@@ -72,7 +79,7 @@ class DatabaseService:
                             self.logger.info(f"Using Local by Flywheel MySQL from: {mysql_bin_path}")
                             return mysql_bin_path
         except Exception as e:
-            self.logger.debug(f"Could not detect Local MySQL: {e}")
+            self.logger.debug(f"Could not detect local MySQL: {e}")
 
         return None
 
@@ -228,6 +235,9 @@ class DatabaseService:
             mysql_params = self._get_mysql_connection_params()
             env.update(mysql_params)
 
+            # Suppress PHP deprecation warnings (WP-CLI compatibility with PHP 8.4+)
+            env['WP_CLI_PHP_ARGS'] = '-d error_reporting=E_ALL&~E_DEPRECATED'
+
             result = subprocess.run(
                 command,
                 shell=True,
@@ -238,15 +248,24 @@ class DatabaseService:
                 env=env
             )
 
+            # Filter PHP deprecation warnings from stderr
+            stderr = result.stderr
+            if stderr:
+                stderr_lines = [
+                    line for line in stderr.splitlines()
+                    if not line.startswith('PHP Deprecated:')
+                ]
+                stderr = '\n'.join(stderr_lines).strip()
+
             success = result.returncode == 0
 
             if success:
                 self.logger.info("Command completed successfully")
             else:
                 self.logger.error(f"Command failed with return code {result.returncode}")
-                self.logger.error(f"stderr: {result.stderr}")
+                self.logger.error(f"stderr: {stderr}")
 
-            return success, result.stdout, result.stderr
+            return success, result.stdout, stderr
 
         except subprocess.TimeoutExpired:
             error_msg = f"Command timed out after {timeout} seconds"
